@@ -98,19 +98,22 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import AppLayout from '../components/layout/AppLayout.vue'
 import { getAnnouncementsApi } from '../api/announcement'
 
+// 防止组件卸载后异步回调修改 state
+const isUnmounted = ref(false)
+
 const router = useRouter()
 
-const categories = [
+const categories = ref([
   { key: '', label: '全部', icon: 'layout-list', count: 0 },
   { key: 'update', label: '功能更新', icon: 'rocket', count: 0 },
   { key: 'event', label: '活动', icon: 'party-popper', count: 0 },
   { key: 'tutorial', label: '教程', icon: 'book-open', count: 0 }
-]
+])
 
 const activeCategory = ref('')
 const announcements = ref([])
@@ -146,28 +149,34 @@ async function fetchAnnouncements() {
       page_size: pageSize,
       status: 'published'
     })
+    if (isUnmounted.value) return
     announcements.value = res.data.items
     total.value = res.data.total
   } catch (e) {
     console.error('获取公告失败:', e)
   } finally {
-    loading.value = false
-    if (window.lucide) lucide.createIcons()
+    if (!isUnmounted.value) {
+      loading.value = false
+      if (window.lucide) lucide.createIcons()
+    }
   }
 }
 
 async function fetchCategoryCounts() {
   try {
     const res = await getAnnouncementsApi({ page: 1, page_size: 1, status: 'published' })
-    categories[0].count = res.data.total
-    for (let i = 1; i < categories.length; i++) {
+    if (isUnmounted.value) return
+    // 替换整项以触发响应式更新
+    categories.value[0] = { ...categories.value[0], count: res.data.total }
+    for (let i = 1; i < categories.value.length; i++) {
       const catRes = await getAnnouncementsApi({
-        category: categories[i].key,
+        category: categories.value[i].key,
         page: 1,
         page_size: 1,
         status: 'published'
       })
-      categories[i].count = catRes.data.total
+      if (isUnmounted.value) return
+      categories.value[i] = { ...categories.value[i], count: catRes.data.total }
     }
   } catch (e) {
     // 静默处理
@@ -191,6 +200,10 @@ watch(currentPage, () => {
 onMounted(() => {
   fetchAnnouncements()
   fetchCategoryCounts()
+})
+
+onUnmounted(() => {
+  isUnmounted.value = true
 })
 </script>
 

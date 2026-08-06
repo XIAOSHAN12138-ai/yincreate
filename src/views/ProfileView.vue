@@ -31,7 +31,7 @@
 
       <!-- 统计数据行 - 作品数、草稿、收藏、素材 -->
       <div class="stats-row">
-        <div v-for="(stat, index) in userStats" :key="index" class="stat-box">
+        <div v-for="(stat, index) in userStats" :key="stat.id" class="stat-box">
           <div class="stat-icon-wrap" :style="{ background: index === 0 ? '#eef2ff' : index === 1 ? '#fef3e2' : index === 2 ? '#fdf4ff' : '#f0fdf4' }">
             <i :data-lucide="stat.icon" :style="{ width: '20px', height: '20px', color: index === 0 ? '#6366f1' : index === 1 ? '#f59e0b' : index === 2 ? '#a855f7' : '#10b981' }"></i>
           </div>
@@ -67,13 +67,72 @@
           </div>
           <div class="balance-divider"></div>
           <div class="balance-item">
-            <div class="balance-icon-wrap" style="background: #fee2e2;">
-              <i data-lucide="clock" style="width: 22px; height: 22px; color: #ef4444;"></i>
+            <div class="balance-icon-wrap" style="background: #d1fae5;">
+              <i data-lucide="check-circle" style="width: 22px; height: 22px; color: #10b981;"></i>
             </div>
             <div class="balance-info">
-              <span class="balance-num">{{ pointsData.expired_points }}</span>
-              <span class="balance-label">过期积分</span>
+              <span class="balance-num">{{ pointsData.remaining ?? (pointsData.total_points - pointsData.used_points) }}</span>
+              <span class="balance-label">剩余额度</span>
             </div>
+          </div>
+        </div>
+
+        <!-- 扣费记录 / 流水明细 -->
+        <div class="transactions-section">
+          <div class="transactions-header">
+            <h4 class="transactions-title">
+              <i data-lucide="receipt" style="width: 16px; height: 16px;"></i>
+              扣费记录
+            </h4>
+            <div class="transactions-filter">
+              <button
+                v-for="t in txTypeOptions"
+                :key="t.value"
+                :class="['tx-filter-btn', { active: txFilter === t.value }]"
+                @click="txFilter = t.value; fetchTransactions()"
+              >{{ t.label }}</button>
+            </div>
+          </div>
+
+          <div v-if="txLoading && txList.length === 0" class="tx-loading">
+            <i data-lucide="loader-2" class="spin-icon" style="width: 20px; height: 20px;"></i>
+            加载中...
+          </div>
+
+          <div v-else-if="txList.length === 0" class="tx-empty">
+            <i data-lucide="inbox" style="width: 32px; height: 32px; color: #d1d5db;"></i>
+            <p>暂无{{ txFilterLabel }}记录</p>
+          </div>
+
+          <div v-else class="tx-list">
+            <div v-for="(tx, i) in txList" :key="tx.id || i" class="tx-item">
+              <div class="tx-left">
+                <div :class="['tx-type-badge', `tx-${tx.transaction_type}`]">
+                  {{ txTypeLabel(tx.transaction_type) }}
+                </div>
+                <div class="tx-desc">{{ tx.description || formatTxDesc(tx) }}</div>
+                <div class="tx-meta">
+                  <span class="tx-time">{{ formatTime(tx.created_at) }}</span>
+                  <span v-if="tx.related_model_id" class="tx-model-id">模型ID: {{ tx.related_model_id }}</span>
+                </div>
+              </div>
+              <div class="tx-right">
+                <span :class="['tx-amount', { 'tx-plus': tx.amount > 0, 'tx-minus': tx.amount < 0 }]">
+                  {{ tx.amount > 0 ? '+' : '' }}{{ tx.amount }}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <!-- 分页 -->
+          <div v-if="txTotal > txPageSize" class="tx-pagination">
+            <button class="tx-page-btn" :disabled="txPage <= 1" @click="txPage--; fetchTransactions()">
+              <i data-lucide="chevron-left" style="width: 14px; height: 14px;"></i> 上一页
+            </button>
+            <span class="tx-page-info">第 {{ txPage }} 页 / 共 {{ Math.ceil(txTotal / txPageSize) }} 页</span>
+            <button class="tx-page-btn" :disabled="txPage >= Math.ceil(txTotal / txPageSize)" @click="txPage++; fetchTransactions()">
+              下一页 <i data-lucide="chevron-right" style="width: 14px; height: 14px;"></i>
+            </button>
           </div>
         </div>
       </div>
@@ -82,7 +141,7 @@
       <div class="section-block">
         <h3 class="section-title">安全中心</h3>
         <div class="security-list">
-          <div v-for="(item, idx) in securityItems" :key="idx" class="security-item">
+          <div v-for="item in securityItems" :key="item.type" class="security-item">
             <div class="security-item-left">
               <div class="security-icon-wrap">
                 <i :data-lucide="item.type === 'password' ? 'key-round' : item.type === 'phone' ? 'smartphone' : item.type === 'mail' ? 'mail' : item.type === 'link' ? 'link' : 'monitor'" style="width: 18px; height: 18px; color: #6366f1;"></i>
@@ -92,7 +151,7 @@
                 <span class="security-desc">{{ item.desc }}</span>
               </div>
             </div>
-            <button class="security-action-btn" @click="item.type === 'badge-check' ? openRealNameAuth() : $router.push('/settings')">{{ item.action }}</button>
+            <button class="security-action-btn" @click="handleSecurityAction(item.type)">{{ item.action }}</button>
           </div>
         </div>
         <button class="logout-btn" @click="handleLogout">
@@ -255,41 +314,222 @@
         </div>
       </div>
     </Teleport>
+
+    <!-- 修改密码弹窗 -->
+    <Teleport to="body">
+      <div v-if="showPasswordModal" class="modal-overlay" @click.self="closePasswordModal">
+        <div class="password-modal-container">
+          <div class="password-header">
+            <h3 class="password-modal-title">修改登录密码</h3>
+            <button class="password-close-btn" @click="closePasswordModal">
+              <i data-lucide="x" style="width: 18px; height: 18px;"></i>
+            </button>
+          </div>
+
+          <div class="password-body">
+            <!-- 表单态 -->
+            <div v-if="passwordStep === 'form'" class="password-form-content">
+              <div class="form-group-pwd">
+                <label class="form-label-pwd">当前密码</label>
+                <div class="pwd-input-wrap">
+                  <input
+                    :type="showOldPwd ? 'text' : 'password'"
+                    v-model="passwordForm.old_password"
+                    placeholder="请输入当前密码"
+                    class="form-input-pwd"
+                    maxlength="128"
+                    @keyup.enter="submitPasswordChange"
+                  >
+                  <button type="button" class="pwd-toggle-btn" @click="showOldPwd = !showOldPwd">
+                    <i :data-lucide="showOldPwd ? 'eye-off' : 'eye'" style="width: 16px; height: 16px;"></i>
+                  </button>
+                </div>
+              </div>
+
+              <div class="form-group-pwd">
+                <label class="form-label-pwd">新密码</label>
+                <div class="pwd-input-wrap">
+                  <input
+                    :type="showNewPwd ? 'text' : 'password'"
+                    v-model="passwordForm.new_password"
+                    placeholder="请输入新密码（1-128 位）"
+                    class="form-input-pwd"
+                    maxlength="128"
+                  >
+                  <button type="button" class="pwd-toggle-btn" @click="showNewPwd = !showNewPwd">
+                    <i :data-lucide="showNewPwd ? 'eye-off' : 'eye'" style="width: 16px; height: 16px;"></i>
+                  </button>
+                </div>
+              </div>
+
+              <div class="form-group-pwd">
+                <label class="form-label-pwd">确认新密码</label>
+                <div class="pwd-input-wrap">
+                  <input
+                    :type="showConfirmPwd ? 'text' : 'password'"
+                    v-model="passwordForm.confirm_password"
+                    placeholder="请再次输入新密码"
+                    class="form-input-pwd"
+                    maxlength="128"
+                    @keyup.enter="submitPasswordChange"
+                  >
+                  <button type="button" class="pwd-toggle-btn" @click="showConfirmPwd = !showConfirmPwd">
+                    <i :data-lucide="showConfirmPwd ? 'eye-off' : 'eye'" style="width: 16px; height: 16px;"></i>
+                  </button>
+                </div>
+              </div>
+
+              <p v-if="passwordError" class="pwd-error-msg">
+                <i data-lucide="alert-circle" style="width: 14px; height: 14px;"></i>
+                {{ passwordError }}
+              </p>
+
+              <div class="pwd-form-actions">
+                <button class="pwd-btn-cancel" @click="closePasswordModal" :disabled="passwordSubmitting">取消</button>
+                <button class="pwd-btn-submit" @click="submitPasswordChange" :disabled="passwordSubmitting">
+              <i v-if="passwordSubmitting" data-lucide="loader-2" class="spin-icon" style="width: 14px; height: 14px;"></i>
+                  {{ passwordSubmitting ? '提交中...' : '确认修改' }}
+                </button>
+              </div>
+            </div>
+
+            <!-- 成功态 -->
+            <div v-else-if="passwordStep === 'success'" class="pwd-success-content">
+              <div class="pwd-success-icon-wrap">
+                <i data-lucide="check-circle" style="width: 64px; height: 64px; color: #10b981;"></i>
+              </div>
+              <h3 class="pwd-success-title">密码修改成功</h3>
+              <p class="pwd-success-desc">
+                您的登录密码已更新。为保障账户安全，建议您<span class="pwd-success-strong">重新登录</span>以刷新登录状态。
+              </p>
+              <div class="pwd-success-actions">
+                <button class="pwd-btn-stay" @click="closePasswordModal">稍后再说</button>
+                <button class="pwd-btn-relogin" @click="handlePasswordChangedRelogin">
+                  <i data-lucide="log-in" style="width: 15px; height: 15px;"></i>
+                  重新登录
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </AppLayout>
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import AppLayout from '../components/layout/AppLayout.vue'
 import { userData } from '../data/userData'
 import { useUserStore } from '../stores/user'
 import { getPointsApi } from '../api/profile'
+import { getBillingTransactionsApi } from '../api/billing'
+import { changePasswordApi } from '../api/auth'
+
+// 防止组件卸载后异步回调修改 state
+const isUnmounted = ref(false)
+let iconTimer = null
 
 const router = useRouter()
 const userStore = useUserStore()
 
 const userStats = ref([
-  { value: 36, label: '我的作品', icon: 'file-video' },
-  { value: 12, label: '草稿箱', icon: 'file-text' },
-  { value: 8, label: '收藏夹', icon: 'star' },
-  { value: 128, label: '素材库', icon: 'folder' }
+  { id: 'works', value: 36, label: '我的作品', icon: 'file-video' },
+  { id: 'drafts', value: 12, label: '草稿箱', icon: 'file-text' },
+  { id: 'favorites', value: 8, label: '收藏夹', icon: 'star' },
+  { id: 'assets', value: 128, label: '素材库', icon: 'folder' }
 ])
 
 const pointsData = reactive({
   total_points: 0,
   used_points: 0,
-  expired_points: 0
+  expired_points: 0,
+  remaining: null
 })
 
-const securityItems = ref([
-  { label: '登录密码', desc: '建议定期更换密码以保障账户安全', action: '修改', type: 'password' },
-  { label: '手机绑定', desc: '138****8888', action: '修改', type: 'phone' },
-  { label: '邮箱绑定', desc: 'creator@example.com', action: '修改', type: 'mail' },
-  { label: '第三方账号', desc: '已绑定微信', action: '管理', type: 'link' },
-  { label: '设备管理', desc: '暂无登录设备，保护账号安全', action: '管理', type: 'monitor' },
-  { label: '实名认证', desc: '未认证，完成认证可享受更多服务', action: '去认证', type: 'badge-check' }
-])
+// ==================== 扣费记录 / 流水 ====================
+const txList = ref([])
+const txLoading = ref(false)
+const txTotal = ref(0)
+const txPage = ref(1)
+const txPageSize = 5
+const txFilter = ref('') // ''=全部, consume, refund, recharge, expire
+
+const txTypeOptions = [
+  { label: '全部', value: '' },
+  { label: '消费', value: 'consume' },
+  { label: '退款', value: 'refund' },
+  { label: '充值', value: 'recharge' },
+  { label: '过期', value: 'expire' }
+]
+
+const txFilterLabel = computed(() => {
+  const opt = txTypeOptions.find(o => o.value === txFilter.value)
+  return opt ? opt.label : ''
+})
+
+function txTypeLabel(type) {
+  const map = { consume: '消费', refund: '退款', recharge: '充值', expire: '过期' }
+  return map[type] || type || '未知'
+}
+
+function formatTxDesc(tx) {
+  if (tx.related_task_id && tx.related_model_id) {
+    return `生成消费 task=${tx.related_task_id} model=${tx.related_model_id}`
+  }
+  return ''
+}
+
+function formatTime(isoStr) {
+  if (!isoStr) return ''
+  try {
+    const d = new Date(isoStr)
+    const pad = n => String(n).padStart(2, '0')
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+  } catch {
+    return isoStr
+  }
+}
+
+async function fetchTransactions() {
+  txLoading.value = true
+  try {
+    const params = {
+      page: txPage.value,
+      page_size: txPageSize
+    }
+    if (txFilter.value) params.transaction_type = txFilter.value
+
+    const res = await getBillingTransactionsApi(params)
+    if (isUnmounted.value) return
+    txList.value = res.items || []
+    txTotal.value = res.total || 0
+  } catch (e) {
+    console.error('获取扣费记录失败:', e)
+    txList.value = []
+    txTotal.value = 0
+  } finally {
+    txLoading.value = false
+    nextTick(() => { if (window.lucide) lucide.createIcons() })
+  }
+}
+
+const securityItems = computed(() => {
+  const baseItems = [
+    { label: '登录密码', desc: '建议定期更换密码以保障账户安全', action: '修改', type: 'password' },
+    { label: '手机绑定', desc: '138****8888', action: '修改', type: 'phone' },
+    { label: '邮箱绑定', desc: 'creator@example.com', action: '修改', type: 'mail' },
+    { label: '第三方账号', desc: '已绑定微信', action: '管理', type: 'link' },
+    { label: '设备管理', desc: '暂无登录设备，保护账号安全', action: '管理', type: 'monitor' },
+    { label: '实名认证', desc: '未认证，完成认证可享受更多服务', action: '去认证', type: 'badge-check' }
+  ]
+  // 系统管理员不支持通过该接口修改密码，隐藏该项
+  if (userStore.user?.user_type === 'admin') {
+    return baseItems.filter(item => item.type !== 'password')
+  }
+  return baseItems
+})
 
 const quickEntries = ref([])
 
@@ -393,20 +633,158 @@ const submitAuth = () => {
   goToStep(3)
 }
 
+// ==================== 修改密码 ====================
+const showPasswordModal = ref(false)
+const passwordStep = ref('form') // 'form' | 'success'
+const passwordSubmitting = ref(false)
+const passwordError = ref('')
+const showOldPwd = ref(false)
+const showNewPwd = ref(false)
+const showConfirmPwd = ref(false)
+const passwordForm = reactive({
+  old_password: '',
+  new_password: '',
+  confirm_password: ''
+})
+
+const openPasswordModal = () => {
+  passwordForm.old_password = ''
+  passwordForm.new_password = ''
+  passwordForm.confirm_password = ''
+  passwordError.value = ''
+  passwordStep.value = 'form'
+  showOldPwd.value = false
+  showNewPwd.value = false
+  showConfirmPwd.value = false
+  showPasswordModal.value = true
+  nextTick(() => {
+    if (window.lucide) lucide.createIcons()
+  })
+}
+
+/**
+ * 安全中心条目点击分发
+ */
+function handleSecurityAction(type) {
+  if (type === 'badge-check') {
+    openRealNameAuth()
+  } else if (type === 'password') {
+    openPasswordModal()
+  } else {
+    router.push('/settings')
+  }
+}
+
+const closePasswordModal = () => {
+  showPasswordModal.value = false
+  passwordStep.value = 'form'
+  passwordForm.old_password = ''
+  passwordForm.new_password = ''
+  passwordForm.confirm_password = ''
+  passwordError.value = ''
+  passwordSubmitting.value = false
+}
+
+/**
+ * 前端表单校验，返回错误消息字符串，校验通过返回 ''
+ */
+function validatePasswordForm() {
+  const { old_password, new_password, confirm_password } = passwordForm
+  if (!old_password) return '请输入当前密码'
+  if (!new_password) return '请输入新密码'
+  if (new_password.length > 128) return '新密码长度不能超过 128 个字符'
+  if (new_password === old_password) return '新密码不能与旧密码相同'
+  if (new_password !== confirm_password) return '两次输入的新密码不一致'
+  return ''
+}
+
+/**
+ * 将后端错误码映射为用户友好的提示文案
+ */
+function mapPasswordError(err) {
+  const code = err?.code
+  const msg = err?.message || ''
+  switch (code) {
+    case 'INVALID_INPUT':
+      return msg || '旧密码或新密码为空，或新密码与旧密码相同'
+    case 'INVALID_CREDENTIALS':
+      return msg || '旧密码错误，请重新输入'
+    case 'NOT_SUPPORTED':
+      return msg || '当前账号类型不支持通过该接口修改密码'
+    case 'USER_NOT_FOUND':
+      return msg || '账号不存在或已被删除'
+    case 'TOKEN_INVALID':
+      return msg || '登录状态异常，请重新登录'
+    default:
+      return msg || '修改密码失败，请稍后重试'
+  }
+}
+
+async function submitPasswordChange() {
+  if (passwordSubmitting.value) return
+  passwordError.value = validatePasswordForm()
+  if (passwordError.value) return
+
+  passwordSubmitting.value = true
+  try {
+    await changePasswordApi({
+      old_password: passwordForm.old_password,
+      new_password: passwordForm.new_password
+    })
+    if (isUnmounted.value) return
+    passwordStep.value = 'success'
+    nextTick(() => {
+      if (window.lucide) lucide.createIcons()
+    })
+  } catch (e) {
+    if (isUnmounted.value) return
+    passwordError.value = mapPasswordError(e)
+  } finally {
+    passwordSubmitting.value = false
+  }
+}
+
+/**
+ * 修改密码成功后跳转登录页重新登录
+ */
+async function handlePasswordChangedRelogin() {
+  closePasswordModal()
+  await userStore.logout()
+  router.push('/login')
+}
+
 onMounted(async () => {
   updateQuickEntries()
   // 获取积分信息
   try {
     const res = await getPointsApi()
+    if (isUnmounted.value) return
     pointsData.total_points = res.data.total_points
     pointsData.used_points = res.data.used_points
-    pointsData.expired_points = res.data.expired_points
+    pointsData.expired_points = res.data.expired_points || 0
+    if (res.data.remaining !== undefined && res.data.remaining !== null) {
+      pointsData.remaining = res.data.remaining
+    }
   } catch (e) {
     console.error('获取积分信息失败', e)
   }
-  setTimeout(() => {
+  // 获取扣费记录
+  fetchTransactions()
+  iconTimer = setTimeout(() => {
+    if (isUnmounted.value) return
     if (window.lucide) lucide.createIcons()
   }, 100)
+})
+
+onUnmounted(() => {
+  isUnmounted.value = true
+  if (iconTimer) {
+    clearTimeout(iconTimer)
+    iconTimer = null
+  }
+  // Teleport 弹窗需在卸载时关闭，避免覆盖新页面
+  showPasswordModal.value = false
+  showRealNameAuthModal.value = false
 })
 </script>
 
@@ -1243,5 +1621,507 @@ onMounted(async () => {
 .btn-close-success:hover {
   transform: translateY(-2px);
   box-shadow: 0 6px 16px rgba(16, 185, 129, 0.4);
+}
+
+/* ==================== 扣费记录 / 流水明细 ==================== */
+.transactions-section {
+  margin-top: 20px;
+  background: white;
+  border: 1.5px solid var(--border-light);
+  border-radius: var(--radius-xl);
+  padding: 20px 24px;
+}
+
+.transactions-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.transactions-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.transactions-filter {
+  display: flex;
+  gap: 6px;
+}
+
+.tx-filter-btn {
+  padding: 5px 14px;
+  border: 1.5px solid var(--border-light);
+  border-radius: 8px;
+  background: white;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.tx-filter-btn:hover {
+  border-color: #c7d2fe;
+  color: #6366f1;
+}
+
+.tx-filter-btn.active {
+  background: #eef2ff;
+  border-color: #6366f1;
+  color: #6366f1;
+  font-weight: 600;
+}
+
+.tx-loading,
+.tx-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 40px 0;
+  color: var(--text-tertiary);
+  font-size: 13px;
+}
+
+.spin-icon {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.tx-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tx-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-radius: 10px;
+  transition: background 0.15s ease;
+}
+
+.tx-item:hover {
+  background: #f9fafb;
+}
+
+.tx-left {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+
+.tx-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+  flex-shrink: 0;
+  margin-left: 24px;
+}
+
+.tx-type-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  width: fit-content;
+}
+
+.tx-consume {
+  background: #fef2f2;
+  color: #dc2626;
+}
+
+.tx-refund {
+  background: #ecfdf5;
+  color: #059669;
+}
+
+.tx-recharge {
+  background: #eff6ff;
+  color: #2563eb;
+}
+
+.tx-expire {
+  background: #fff7ed;
+  color: #ea580c;
+}
+
+.tx-desc {
+  font-size: 13px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 420px;
+}
+
+.tx-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.tx-time {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.tx-model-id {
+  font-size: 11px;
+  color: #6366f1;
+  background: #eef2ff;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.tx-amount {
+  font-size: 15px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.tx-minus {
+  color: #dc2626;
+}
+
+.tx-plus {
+  color: #059669;
+}
+
+/* 分页 */
+.tx-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-light);
+}
+
+.tx-page-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 14px;
+  border: 1.5px solid var(--border-light);
+  border-radius: 8px;
+  background: white;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.tx-page-btn:hover:not(:disabled) {
+  border-color: #6366f1;
+  color: #6366f1;
+}
+
+.tx-page-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.tx-page-info {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+/* ==================== 修改密码弹窗 ==================== */
+.password-modal-container {
+  width: 90%;
+  max-width: 460px;
+  background: white;
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2);
+  animation: pwdModalIn 0.25s ease;
+}
+
+@keyframes pwdModalIn {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.password-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 24px;
+  border-bottom: 1.5px solid #e5e7eb;
+  background: #fafafa;
+}
+
+.password-modal-title {
+  font-size: 17px;
+  font-weight: 700;
+  color: #111827;
+  margin: 0;
+}
+
+.password-close-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: #6b7280;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.password-close-btn:hover {
+  background: #f3f4f6;
+  color: #111827;
+}
+
+.password-body {
+  padding: 28px 28px 24px;
+}
+
+.password-form-content {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  animation: fadeInUp 0.3s ease;
+}
+
+.form-group-pwd {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.form-label-pwd {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: #374151;
+}
+
+.pwd-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.form-input-pwd {
+  width: 100%;
+  padding: 11px 42px 11px 14px;
+  border: 1.5px solid #d1d5db;
+  border-radius: 10px;
+  font-size: 14px;
+  color: #111827;
+  background: white;
+  outline: none;
+  transition: all 0.2s ease;
+  box-sizing: border-box;
+}
+
+.form-input-pwd:focus {
+  border-color: #6366f1;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12);
+}
+
+.form-input-pwd::placeholder {
+  color: #9ca3af;
+}
+
+.pwd-toggle-btn {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #9ca3af;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.pwd-toggle-btn:hover {
+  background: #f3f4f6;
+  color: #6b7280;
+}
+
+.pwd-error-msg {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 14px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  font-size: 12.5px;
+  color: #dc2626;
+  font-weight: 500;
+  margin: -4px 0 0;
+}
+
+.pwd-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.pwd-btn-cancel,
+.pwd-btn-submit {
+  padding: 10px 22px;
+  border-radius: 10px;
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.25s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pwd-btn-cancel {
+  background: white;
+  border: 1.5px solid #d1d5db;
+  color: #6b7280;
+}
+
+.pwd-btn-cancel:hover:not(:disabled) {
+  background: #f9fafb;
+  border-color: #9ca3af;
+  color: #374151;
+}
+
+.pwd-btn-submit {
+  background: linear-gradient(135deg, #6366f1, #4f46e5);
+  border: none;
+  color: white;
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
+}
+
+.pwd-btn-submit:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(99, 102, 241, 0.4);
+}
+
+.pwd-btn-cancel:disabled,
+.pwd-btn-submit:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* 成功态 */
+.pwd-success-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 24px 16px 8px;
+  animation: fadeInUp 0.3s ease;
+}
+
+.pwd-success-icon-wrap {
+  margin-bottom: 16px;
+  animation: scaleIn 0.4s ease;
+}
+
+.pwd-success-title {
+  font-size: 22px;
+  font-weight: 800;
+  color: #111827;
+  margin-bottom: 10px;
+}
+
+.pwd-success-desc {
+  font-size: 14px;
+  color: #6b7280;
+  line-height: 1.6;
+  margin-bottom: 24px;
+  max-width: 320px;
+}
+
+.pwd-success-strong {
+  color: #6366f1;
+  font-weight: 600;
+}
+
+.pwd-success-actions {
+  display: flex;
+  gap: 12px;
+  width: 100%;
+}
+
+.pwd-btn-stay,
+.pwd-btn-relogin {
+  flex: 1;
+  padding: 11px 16px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.25s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.pwd-btn-stay {
+  background: white;
+  border: 1.5px solid #d1d5db;
+  color: #6b7280;
+}
+
+.pwd-btn-stay:hover {
+  background: #f9fafb;
+  border-color: #9ca3af;
+}
+
+.pwd-btn-relogin {
+  background: linear-gradient(135deg, #6366f1, #4f46e5);
+  border: none;
+  color: white;
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
+}
+
+.pwd-btn-relogin:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(99, 102, 241, 0.4);
 }
 </style>

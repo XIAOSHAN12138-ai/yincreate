@@ -82,7 +82,9 @@ POST /generate?sync=true
 | feature | string | 是 | 功能：`text_to_image` / `text_to_video` / `image_reference` / `global_reference` / `multi_reference` / `digital_human` |
 | prompt | string | 是 | 提示词，引用素材用 `<<<object_id>>>` 标记 |
 | parameters | object | 是 | 生成参数（见下表） |
-| input_files | array | 否 | 引用素材列表 |
+| input_files | array | 否 | 引用素材列表。元素支持 `media_id`（素材库引用，Seedance 人脸场景推荐）或 `url`（直接传 URL，非人脸场景） |
+
+> **Seedance 2.0 素材库资源引用**：含人脸的参考图/视频不能直接传 `url`，必须先上传到素材库再通过 `media_id` 引用。后端自动注册到 Neolink 资源库（`Asset://tkres_xxx`）。`media_id` 和 `url` 同时存在时优先用 `media_id`。详见 [`UNIFIED_VIDEO_API.md`](../UNIFIED_VIDEO_API.md) §4.2。
 
 **parameters 字段（按 output_type 区分）：**
 
@@ -375,9 +377,17 @@ CREATE INDEX idx_conv_updated_at ON conversations(updated_at DESC);
     "url": "https://cdn.example.com/img1.png",
     "object_id": "image_1",
     "purpose": "reference"
+  },
+  {
+    "type": "image",
+    "media_id": "MEDIA-IMG-002",
+    "object_id": "image_2",
+    "purpose": "reference"
   }
 ]
 ```
+
+> `media_id` 和 `url` 二选一：`media_id` 引用素材库素材（Seedance 人脸场景），`url` 直接传公网地址（非人脸场景）。
 
 **索引：**
 ```sql

@@ -190,7 +190,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import AppLayout from '../../components/layout/AppLayout.vue'
 
@@ -334,10 +334,23 @@ const selectTab = (tab) => {
   if (routeMap[tab]) router.push(routeMap[tab])
 }
 
+let iconTimer = null
 onMounted(() => {
-  setTimeout(() => {
+  iconTimer = setTimeout(() => {
     if (window.lucide) lucide.createIcons()
   }, 100)
+})
+
+onUnmounted(() => {
+  // 清理定时器，避免卸载后修改 state
+  if (maxAlertTimer.value) {
+    clearTimeout(maxAlertTimer.value)
+    maxAlertTimer.value = null
+  }
+  if (iconTimer) {
+    clearTimeout(iconTimer)
+    iconTimer = null
+  }
 })
 </script>
 

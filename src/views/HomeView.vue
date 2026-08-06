@@ -149,8 +149,54 @@
             <span>新建项目</span>
           </div>
 
-          <div v-for="project in recentProjects" :key="project.id" class="project-card">
-            <img :src="project.thumbnail" :alt="project.name" class="project-thumbnail" @error="handleImageError">
+          <div v-if="projectsLoading" class="projects-loading">
+            <i data-lucide="loader-2" style="width: 18px; height: 18px;"></i>
+            <span>加载中...</span>
+          </div>
+          <div v-else-if="recentProjects.length === 0" class="projects-empty">
+            <span>暂无对话，点击左侧"新建项目"开始创作</span>
+          </div>
+
+          <div
+            v-for="project in recentProjects"
+            :key="project.id"
+            class="project-card"
+            @click="openConversation(project.id)"
+          >
+            <div class="project-thumb-wrap">
+              <img
+                v-if="project.thumbnail && project.thumbnailType === 'image'"
+                :src="project.thumbnail"
+                :alt="project.name"
+                class="project-thumbnail"
+                @error="handleImageError"
+              >
+              <video
+                v-else-if="project.thumbnail && project.thumbnailType === 'video'"
+                ref="coverVideoRefs"
+                :src="project.thumbnail"
+                :alt="project.name"
+                class="project-thumbnail"
+                preload="metadata"
+                muted
+                playsinline
+                @loadeddata="onCoverVideoFrameLoaded"
+                @loadedmetadata="onCoverVideoMetaLoaded"
+                @error="handleImageError"
+              ></video>
+              <div v-else class="project-thumbnail project-thumbnail-placeholder">
+                <i data-lucide="film" style="width: 28px; height: 28px;"></i>
+              </div>
+              <!-- 视频播放按钮覆盖层 -->
+              <div v-if="project.thumbnail && project.thumbnailType === 'video'" class="play-button-overlay">
+                <i data-lucide="play" style="width: 22px; height: 22px; fill: currentColor;"></i>
+              </div>
+              <!-- 视频时长标签 -->
+              <span
+                v-if="project.thumbnail && project.thumbnailType === 'video' && project.duration"
+                class="video-duration-badge"
+              >{{ project.duration }}</span>
+            </div>
             <div class="project-info">
               <h4 class="project-name">{{ project.name }}</h4>
               <p class="project-date">{{ project.date }}</p>
@@ -163,11 +209,11 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppLayout from '../components/layout/AppLayout.vue'
-import { userData } from '../data/userData'
 import { videosData } from '../data/videosData'
+import { listConversationsApi, listMessagesApi } from '../api/conversation'
 
 const route = useRoute()
 const router = useRouter()
@@ -184,10 +230,178 @@ const quickStartCards = [
 ]
 
 const videos = ref(videosData)
-const recentProjects = ref(userData.recentProjects)
+const recentProjects = ref([])
+const projectsLoading = ref(false)
+// 组件卸载标志：防止异步回调在卸载后修改 state
+let isUnmounted = false
 
 function handleImageError(e) {
   e.target.style.display = 'none'
+}
+
+// 视频封面加载后 seek 到 0.1s 展示第一帧
+function onCoverVideoFrameLoaded(e) {
+  const video = e.target
+  try {
+    if (video.duration > 0.2 && Math.abs(video.currentTime - 0.1) > 0.05) {
+      video.currentTime = 0.1
+    }
+  } catch (_) { /* ignore */ }
+}
+
+// 视频元数据加载完成 → 提取时长并格式化回写到对应 project
+function onCoverVideoMetaLoaded(e) {
+  const video = e.target
+  const dur = video && typeof video.duration === 'number' && isFinite(video.duration) ? video.duration : 0
+  if (dur <= 0) return
+  const formatted = formatVideoDuration(dur)
+  if (!formatted) return
+  // 通过 src 反查对应 project
+  const src = video.src || ''
+  const target = recentProjects.value.find(p => p.thumbnail === src)
+  if (target && target.duration !== formatted) {
+    target.duration = formatted
+  }
+}
+
+// 把秒数格式化为 mm:ss 或 h:mm:ss
+function formatVideoDuration(seconds) {
+  if (!seconds || seconds <= 0 || !isFinite(seconds)) return ''
+  const total = Math.round(seconds)
+  const h = Math.floor(total / 3600)
+  const m = Math.floor((total % 3600) / 60)
+  const s = total % 60
+  if (h > 0) {
+    return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+  }
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+}
+
+// 根据 URL 扩展名判断媒体类型
+function inferTypeFromUrl(url) {
+  if (!url || typeof url !== 'string') return 'image'
+  const cleanUrl = url.split('?')[0].toLowerCase()
+  const videoExts = ['.mp4', '.webm', '.mov', '.avi', '.mkv', '.m4v', '.flv', '.wmv']
+  const imageExts = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg', '.ico']
+  if (videoExts.some(ext => cleanUrl.endsWith(ext))) return 'video'
+  if (imageExts.some(ext => cleanUrl.endsWith(ext))) return 'image'
+  return 'image'
+}
+
+// 格式化对话时间为展示文案：刚刚 / N 分钟前 / N 小时前 / MM/DD HH:mm
+function formatProjectTime(ts) {
+  if (!ts) return ''
+  const diff = Date.now() - ts
+  if (diff < 60000) return '刚刚'
+  if (diff < 3600000) return `${Math.floor(diff / 60000)} 分钟前`
+  if (diff < 86400000) return `${Math.floor(diff / 3600000)} 小时前`
+  const d = new Date(ts)
+  const mm = String(d.getMonth() + 1).padStart(2, '0')
+  const dd = String(d.getDate()).padStart(2, '0')
+  const hh = String(d.getHours()).padStart(2, '0')
+  const mi = String(d.getMinutes()).padStart(2, '0')
+  return `更新于 ${d.getFullYear()}-${mm}-${dd} ${hh}:${mi}`
+}
+
+// 解包 API 响应：兼容 { code, data } 包装和直接返回业务数据两种格式
+function unwrapResponse(resData) {
+  if (resData && resData.code === 200 && resData.data !== undefined) {
+    return resData.data
+  }
+  return resData
+}
+
+// 从消息列表中提取最近一个生成结果的封面 URL
+// 优先使用 result_thumbnail_url，其次用 result_video_url（前端展示时截取第一帧）
+// messages 为 created_at ASC 排序，从尾部往前找最新的 assistant 结果
+function pickCoverFromMessages(messages) {
+  if (!Array.isArray(messages) || messages.length === 0) return null
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]
+    if (m && m.role === 'assistant') {
+      if (m.result_thumbnail_url) {
+        return { url: m.result_thumbnail_url, type: 'image' }
+      }
+      if (m.result_video_url) {
+        return { url: m.result_video_url, type: inferTypeFromUrl(m.result_video_url) }
+      }
+    }
+  }
+  return null
+}
+
+// 为单个对话异步加载封面（从消息列表提取）
+async function loadCoverForProject(project) {
+  try {
+    const res = await listMessagesApi(project.id, { limit: 50, offset: 0 })
+    if (isUnmounted) return
+    const data = unwrapResponse(res.data)
+    if (!data || !Array.isArray(data.items)) return
+    const cover = pickCoverFromMessages(data.items)
+    if (!cover) return
+    // 找到列表中对应的 project 并更新（避免数组被整体替换后引用失效）
+    const target = recentProjects.value.find(p => p.id === project.id)
+    if (target) {
+      target.thumbnail = cover.url
+      target.thumbnailType = cover.type
+    }
+  } catch (e) {
+    // 单个对话封面加载失败不影响其他
+    console.warn(`加载对话封面失败(${project.id}):`, e?.message || e)
+  }
+}
+
+// 并发上限控制的批量加载封面
+async function loadCoversBatch(projects, concurrency = 4) {
+  const queue = [...projects]
+  const workers = Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
+    while (queue.length > 0) {
+      const p = queue.shift()
+      if (!p) return
+      await loadCoverForProject(p)
+    }
+  })
+  await Promise.all(workers)
+}
+
+// 从后端加载最近对话，映射为最近项目列表
+async function loadRecentProjects() {
+  projectsLoading.value = true
+  try {
+    const res = await listConversationsApi({ limit: 20, offset: 0 })
+    const data = unwrapResponse(res.data)
+    if (!data || !Array.isArray(data.items)) {
+      recentProjects.value = []
+      return
+    }
+    recentProjects.value = data.items
+      .filter(c => (c.status || 'active') === 'active')
+      .map(c => ({
+        id: c.conversation_id || c.id,
+        name: c.title || '未命名对话',
+        thumbnail: '',
+        thumbnailType: 'image',
+        duration: '',
+        date: formatProjectTime(new Date(c.last_message_at || c.updated_at || c.created_at).getTime()),
+        status: c.status || 'active'
+      }))
+    // 异步加载封面（不阻塞列表首屏）
+    loadCoversBatch(recentProjects.value.slice()).then(() => {
+      if (isUnmounted) return
+      nextTick(() => { if (window.lucide) lucide.createIcons() })
+    })
+  } catch (e) {
+    console.warn('加载最近对话失败:', e)
+    recentProjects.value = []
+  } finally {
+    projectsLoading.value = false
+    nextTick(() => { if (window.lucide) lucide.createIcons() })
+  }
+}
+
+// 点击项目卡片跳转到生成页面并选中指定对话
+function openConversation(conversationId) {
+  router.push({ path: '/generate', query: { conversation_id: conversationId } })
 }
 
 onMounted(() => {
@@ -195,10 +409,17 @@ onMounted(() => {
     lucide.createIcons()
   }
 
+  // 拉取最近对话列表（仅展示 active 状态的）
+  loadRecentProjects()
+
   if (route.query.showRealNameTip === 'true') {
     showRealNameTip.value = true
     router.replace({ query: {} })
   }
+})
+
+onBeforeUnmount(() => {
+  isUnmounted = true
 })
 
 const closeRealNameTip = () => {
@@ -590,6 +811,7 @@ const goToProfile = () => {
   line-height: 1.3;
   display: -webkit-box;
   -webkit-line-clamp: 2;
+  line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
@@ -714,11 +936,98 @@ const goToProfile = () => {
   box-shadow: 0 10px 25px -5px rgb(0 0 0 / 0.08);
 }
 
+.project-thumb-wrap {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+}
+
 .project-thumbnail {
   width: 100%;
   aspect-ratio: 16/10;
   object-fit: cover;
   background: linear-gradient(135deg, #e0e7ff 0%, #ddd6fe 100%);
+  display: block;
+}
+
+.project-thumbnail-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #a5b4fc;
+}
+
+/* 视频播放按钮覆盖层 */
+.play-button-overlay {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  pointer-events: none;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+}
+
+.play-button-overlay i {
+  margin-left: 3px;
+}
+
+.project-card:hover .play-button-overlay {
+  background: rgba(99, 102, 241, 0.85);
+  transform: translate(-50%, -50%) scale(1.08);
+}
+
+/* 视频时长标签 */
+.video-duration-badge {
+  position: absolute;
+  bottom: 6px;
+  right: 6px;
+  background: rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(8px);
+  color: #fff;
+  padding: 2px 6px;
+  border-radius: 5px;
+  font-size: 9.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  line-height: 1.4;
+}
+
+.projects-loading,
+.projects-empty {
+  min-width: 190px;
+  aspect-ratio: 16/10;
+  background: white;
+  border: 1.5px dashed rgba(229, 231, 235, 0.7);
+  border-radius: 18px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: #9ca3af;
+  font-size: 11px;
+  padding: 12px;
+  text-align: center;
+}
+
+.projects-loading i {
+  animation: spin 1.2s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 .project-info {

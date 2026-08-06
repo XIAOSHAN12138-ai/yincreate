@@ -23,22 +23,61 @@
         <span class="notification-badge">3</span>
       </button>
 
-      <!-- 用户信息 -->
-      <div class="user-info" @click="goToProfile">
-        <span class="user-avatar">{{ userAvatar }}</span>
-        <span class="user-name">{{ userName }}</span>
-        <i data-lucide="chevron-down" style="width: 14px; height: 14px;"></i>
+      <!-- 用户信息 + 悬停下拉菜单 -->
+      <div
+        class="user-info-wrapper"
+        @mouseenter="openUserMenu"
+        @mouseleave="scheduleCloseUserMenu"
+      >
+        <div class="user-info" @click="goToProfile">
+          <span class="user-avatar">{{ userAvatar }}</span>
+          <span class="user-name">{{ userName }}</span>
+          <i
+            data-lucide="chevron-down"
+            class="user-chevron"
+            :class="{ 'chevron-open': userMenuOpen }"
+            style="width: 14px; height: 14px;"
+          ></i>
+        </div>
+
+        <!-- 下拉菜单 -->
+        <transition name="user-menu-fade">
+          <div v-if="userMenuOpen" class="user-dropdown" @mouseenter="cancelCloseUserMenu" @mouseleave="scheduleCloseUserMenu">
+            <button class="dropdown-item" @click="handleMenuClick('profile')">
+              <LucideIcon name="user" svgStyle="width: 16px; height: 16px;" />
+              <span>个人资料</span>
+            </button>
+            <button class="dropdown-item" @click="handleMenuClick('password')">
+              <LucideIcon name="key-round" svgStyle="width: 16px; height: 16px;" />
+              <span>修改密码</span>
+            </button>
+            <button class="dropdown-item" @click="handleMenuClick('settings')">
+              <LucideIcon name="settings" svgStyle="width: 16px; height: 16px;" />
+              <span>账户设置</span>
+            </button>
+            <button class="dropdown-item" @click="handleMenuClick('assets')">
+              <LucideIcon name="folder" svgStyle="width: 16px; height: 16px;" />
+              <span>我的资产</span>
+            </button>
+            <div class="dropdown-divider"></div>
+            <button class="dropdown-item logout-item" @click="handleMenuClick('logout')">
+              <LucideIcon name="log-out" svgStyle="width: 16px; height: 16px;" />
+              <span>退出登录</span>
+            </button>
+          </div>
+        </transition>
       </div>
     </div>
   </header>
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { useUserStore } from '../../stores/user'
 import { useAppStore } from '../../stores/app'
 import { userData } from '../../data/userData'
+import LucideIcon from '../LucideIcon.vue'
 
 const props = defineProps({
   pageTitle: {
@@ -55,6 +94,52 @@ const searchQuery = ref('')
 
 const userAvatar = computed(() => userStore.user?.avatar || '👤')
 const userName = computed(() => userStore.user?.name || '用户')
+
+// 用户下拉菜单：鼠标悬停显示，移出延迟关闭（避免滑过间隙时误关）
+const userMenuOpen = ref(false)
+let closeTimer = null
+
+function openUserMenu() {
+  cancelCloseUserMenu()
+  userMenuOpen.value = true
+}
+
+function scheduleCloseUserMenu() {
+  cancelCloseUserMenu()
+  closeTimer = setTimeout(() => {
+    userMenuOpen.value = false
+  }, 150)
+}
+
+function cancelCloseUserMenu() {
+  if (closeTimer) {
+    clearTimeout(closeTimer)
+    closeTimer = null
+  }
+}
+
+function closeUserMenu() {
+  cancelCloseUserMenu()
+  userMenuOpen.value = false
+}
+
+async function handleMenuClick(key) {
+  closeUserMenu()
+  if (key === 'logout') {
+    await userStore.logout()
+    router.push('/login')
+    return
+  }
+  if (key === 'profile') {
+    router.push('/profile')
+  } else if (key === 'password') {
+    router.push({ path: '/settings', query: { section: 'password' } })
+  } else if (key === 'settings') {
+    router.push('/settings')
+  } else if (key === 'assets') {
+    router.push('/assets')
+  }
+}
 
 function handleSearch() {
   appStore.setSearchQuery(searchQuery.value)
@@ -73,6 +158,10 @@ onMounted(() => {
     lucide.createIcons()
   }
 })
+
+onBeforeUnmount(() => {
+  cancelCloseUserMenu()
+})
 </script>
 
 <style scoped>
@@ -85,6 +174,9 @@ onMounted(() => {
   backdrop-filter: blur(12px);
   border-bottom: 1px solid rgba(229, 231, 235, 0.7);
   gap: 20px;
+  position: relative;
+  /* 提升整个顶栏层级，确保下拉菜单不会被下方 content-wrapper 遮挡 */
+  z-index: 100;
 }
 
 .page-title {
@@ -193,6 +285,10 @@ onMounted(() => {
   border: 2px solid white;
 }
 
+.user-info-wrapper {
+  position: relative;
+}
+
 .user-info {
   display: flex;
   align-items: center;
@@ -207,6 +303,15 @@ onMounted(() => {
 .user-info:hover {
   background: rgba(99, 102, 241, 0.05);
   border-color: rgba(99, 102, 241, 0.15);
+}
+
+.user-chevron {
+  transition: transform 0.25s ease;
+  color: #6b7280;
+}
+
+.user-chevron.chevron-open {
+  transform: rotate(180deg);
 }
 
 .user-avatar {
@@ -224,5 +329,86 @@ onMounted(() => {
   font-size: 13px;
   font-weight: 600;
   color: #111827;
+}
+
+/* 下拉菜单 */
+.user-dropdown {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  min-width: 180px;
+  background: white;
+  border: 1px solid rgba(229, 231, 235, 0.9);
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.04);
+  padding: 6px;
+  z-index: 9999;
+}
+
+.dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 12px;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: #374151;
+  transition: all 0.15s ease;
+  text-align: left;
+}
+
+.dropdown-item:hover {
+  background: rgba(99, 102, 241, 0.08);
+  color: #4338ca;
+}
+
+.dropdown-item :deep(svg) {
+  flex-shrink: 0;
+  color: #6b7280;
+  transition: color 0.15s ease;
+}
+
+.dropdown-item:hover :deep(svg) {
+  color: #4338ca;
+}
+
+.dropdown-divider {
+  height: 1px;
+  background: rgba(229, 231, 235, 0.9);
+  margin: 6px 4px;
+}
+
+.logout-item {
+  color: #dc2626;
+}
+
+.logout-item:hover {
+  background: rgba(239, 68, 68, 0.08);
+  color: #b91c1c;
+}
+
+.logout-item :deep(svg) {
+  color: #dc2626;
+}
+
+.logout-item:hover :deep(svg) {
+  color: #b91c1c;
+}
+
+/* 下拉动画 */
+.user-menu-fade-enter-active,
+.user-menu-fade-leave-active {
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.user-menu-fade-enter-from,
+.user-menu-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-6px);
 }
 </style>

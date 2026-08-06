@@ -645,15 +645,20 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, nextTick } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, reactive, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
 import AppLayout from '../components/layout/AppLayout.vue'
 import { userData } from '../data/userData'
 import { useUserStore } from '../stores/user'
 import { useAppStore } from '../stores/app'
 import { getSiteCustomizationApi, saveSiteCustomizationApi, uploadFaviconApi } from '../api/profile'
 
+// 防止组件卸载后异步回调修改 state
+const isUnmounted = ref(false)
+let iconTimer = null
+
 const router = useRouter()
+const route = useRoute()
 const userStore = useUserStore()
 const appStore = useAppStore()
 
@@ -835,6 +840,7 @@ const handleFaviconUpload = async (event) => {
     const formData = new FormData()
     formData.append('file', file)
     const res = await uploadFaviconApi(formData)
+    if (isUnmounted.value) return
     preferenceData.site_favicon = res.data.url
     showToast('图标上传成功')
     nextTick(() => {
@@ -871,10 +877,16 @@ const handleLogout = async () => {
 }
 
 onMounted(async () => {
+  // 支持通过 ?section= 深链定位到指定设置项（如 TopNav 的“修改密码”入口）
+  const section = route.query.section
+  if (typeof section === 'string' && settingsSections.value.some(s => s.key === section)) {
+    activeSection.value = section
+  }
   // 企业账号从后端获取网站个性化设置
   if (userStore.user?.user_type === 'enterprise') {
     try {
       const res = await getSiteCustomizationApi()
+      if (isUnmounted.value) return
       preferenceData.site_favicon = res.data.favicon_url || ''
       preferenceData.site_title = res.data.site_title || ''
       // 同步到 appStore（持久化）
@@ -890,9 +902,18 @@ onMounted(async () => {
       preferenceData.site_title = appStore.siteTitle
     }
   }
-  setTimeout(() => {
+  iconTimer = setTimeout(() => {
+    if (isUnmounted.value) return
     if (window.lucide) lucide.createIcons()
   }, 100)
+})
+
+onUnmounted(() => {
+  isUnmounted.value = true
+  if (iconTimer) {
+    clearTimeout(iconTimer)
+    iconTimer = null
+  }
 })
 </script>
 

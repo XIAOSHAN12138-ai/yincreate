@@ -57,12 +57,11 @@
 </template>
 
 <script setup>
-import { computed, ref, onMounted } from 'vue'
+import { computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useUserStore } from '../../stores/user'
 import { useAppStore } from '../../stores/app'
 import { userData } from '../../data/userData'
-import { getPointsApi } from '../../api/profile'
 
 const router = useRouter()
 const route = useRoute()
@@ -76,7 +75,8 @@ const allNavItems = [
   { id: 'community', label: '社区', icon: 'users', path: '/community' },
   { id: 'announcement', label: '公告', icon: 'megaphone', path: '/announcement' },
   { id: 'assets', label: '资产', icon: 'folder-open', path: '/assets' },
-  { id: 'enterprise', label: '企业管理', icon: 'building-2', path: '/enterprise/bi', requireRole: ['enterprise', 'admin'] }
+  { id: 'enterprise', label: '企业管理', icon: 'building-2', path: '/enterprise/bi', requireRole: ['enterprise', 'admin'] },
+  { id: 'admin', label: '管理员', icon: 'shield-check', path: '/admin', requireRole: ['admin'] }
 ]
 
 const navItems = computed(() => {
@@ -89,21 +89,8 @@ const storageUsed = computed(() => `${userData.user.storage.used}${userData.user
 const storageTotal = computed(() => `${userData.user.storage.total}${userData.user.storage.unit}`)
 const storagePercentage = computed(() => (userData.user.storage.used / userData.user.storage.total) * 100)
 
-// 积分相关
-const userPoints = ref(null)
-const remainingPoints = computed(() => {
-  if (!userPoints.value) return '--'
-  return userPoints.value.total_points - userPoints.value.used_points
-})
-
-async function fetchUserPoints() {
-  try {
-    const res = await getPointsApi()
-    userPoints.value = res.data
-  } catch (e) {
-    console.warn('获取积分信息失败:', e)
-  }
-}
+// 使用 store 的积分状态
+const remainingPoints = computed(() => userStore.remainingPoints)
 
 function isActive(path) {
   if (path === '/') {
@@ -120,7 +107,7 @@ onMounted(() => {
   if (window.lucide) {
     lucide.createIcons()
   }
-  fetchUserPoints()
+  userStore.fetchPoints()
 })
 </script>
 
@@ -195,7 +182,7 @@ onMounted(() => {
   gap: 10px;
   padding: 7px 12px;
   border-radius: 8px;
-  color: #6b7280;
+  color: #64748b;
   text-decoration: none;
   font-size: 13.5px;
   font-weight: 500;
@@ -205,11 +192,16 @@ onMounted(() => {
 }
 
 .nav-item:hover {
-  color: #3b82f6;
+  color: #2563eb;
+}
+
+.nav-item:hover .icon-wrapper {
+  color: #2563eb;
+  background: rgba(37, 99, 235, 0.08);
 }
 
 .nav-item.active {
-  color: #3b82f6;
+  color: #2563eb;
   font-weight: 600;
 }
 
@@ -221,7 +213,7 @@ onMounted(() => {
   transform: translateY(-50%);
   width: 3px;
   height: 60%;
-  background: #3b82f6;
+  background: #2563eb;
   border-radius: 0 3px 3px 0;
 }
 
@@ -233,11 +225,13 @@ onMounted(() => {
   justify-content: center;
   border-radius: 8px;
   background: transparent;
+  color: #3b82f6;
   transition: all 0.2s ease;
 }
 
 .nav-item.active .icon-wrapper {
-  color: #3b82f6;
+  color: #2563eb;
+  background: rgba(37, 99, 235, 0.1);
 }
 
 .member-card {

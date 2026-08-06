@@ -40,50 +40,30 @@
     <!-- 右侧登录表单区域 -->
     <div class="login-form-container">
       <form class="login-form" @submit.prevent="handleLogin">
-        <h2 class="form-title">{{ isRegister ? '创建账号' : '欢迎回来' }}</h2>
-        <p class="form-subtitle">{{ isRegister ? '开始您的AI创作之旅' : '登录以继续使用' }}</p>
+        <h2 class="form-title">欢迎回来</h2>
+        <p class="form-subtitle">登录以继续使用</p>
 
-        <!-- 认证方式切换 -->
-        <div class="auth-tabs">
-          <button
-            type="button"
-            :class="['auth-tab', { active: authMode === 'account' }]"
-            @click="authMode = 'account'"
-          >
-            账号密码
-          </button>
-          <button
-            type="button"
-            :class="['auth-tab', { active: authMode === 'phone' }]"
-            @click="authMode = 'phone'"
-          >
-            手机验证码
-          </button>
-        </div>
-
-        <!-- 账号密码模式 -->
-        <template v-if="authMode === 'account'">
-          <!-- 用户类型选择 -->
-          <div class="form-group">
-            <label class="form-label">登录身份</label>
-            <div class="user-type-tabs">
-              <button
-                type="button"
-                :class="['user-type-tab', { active: userType === 'employee' }]"
-                @click="userType = 'employee'"
-              >员工</button>
-              <button
-                type="button"
-                :class="['user-type-tab', { active: userType === 'enterprise' }]"
-                @click="userType = 'enterprise'"
-              >企业</button>
-              <button
-                type="button"
-                :class="['user-type-tab', { active: userType === 'admin' }]"
-                @click="userType = 'admin'"
-              >系统管理员</button>
-            </div>
+        <!-- 用户类型选择 -->
+        <div class="form-group">
+          <label class="form-label">登录身份</label>
+          <div class="user-type-tabs">
+            <button
+              type="button"
+              :class="['user-type-tab', { active: userType === 'employee' }]"
+              @click="userType = 'employee'"
+            >员工</button>
+            <button
+              type="button"
+              :class="['user-type-tab', { active: userType === 'enterprise' }]"
+              @click="userType = 'enterprise'"
+            >企业</button>
+            <button
+              type="button"
+              :class="['user-type-tab', { active: userType === 'admin' }]"
+              @click="userType = 'admin'"
+            >系统管理员</button>
           </div>
+        </div>
 
           <div class="form-group">
             <label class="form-label">{{ loginIdLabel }}</label>
@@ -117,44 +97,6 @@
             </div>
             <span v-if="errors.password" class="error-message">{{ errors.password }}</span>
           </div>
-        </template>
-
-        <!-- 手机验证码模式 -->
-        <template v-if="authMode === 'phone'">
-          <div class="form-group">
-            <label class="form-label">手机号码</label>
-            <input
-              v-model="phone"
-              type="tel"
-              class="form-input"
-              placeholder="请输入手机号"
-              :class="{ error: errors.phone }"
-            >
-            <span v-if="errors.phone" class="error-message">{{ errors.phone }}</span>
-          </div>
-
-          <div class="form-group">
-            <label class="form-label">验证码</label>
-            <div class="code-input-wrapper">
-              <input
-                v-model="code"
-                type="text"
-                class="form-input"
-                placeholder="请输入验证码"
-                :class="{ error: errors.code }"
-              >
-              <button
-                type="button"
-                class="send-code-btn"
-                :disabled="codeCountdown > 0"
-                @click="sendCode"
-              >
-                {{ codeCountdown > 0 ? `${codeCountdown}s` : '获取验证码' }}
-              </button>
-            </div>
-            <span v-if="errors.code" class="error-message">{{ errors.code }}</span>
-          </div>
-        </template>
 
         <!-- 记住我 & 忘记密码 -->
         <div class="form-options">
@@ -167,37 +109,11 @@
 
         <!-- 登录按钮 -->
         <button type="submit" class="submit-btn" :disabled="isLoading">
-          {{ isLoading ? '登录中...' : (isRegister ? '注册' : '登录') }}
+          {{ isLoading ? '登录中...' : '登录' }}
         </button>
 
         <!-- 登录错误提示 -->
         <div v-if="loginError" class="login-error">{{ loginError }}</div>
-
-        <!-- 分隔线 -->
-        <div class="divider">
-          <span>或</span>
-        </div>
-
-        <!-- 第三方登录 -->
-        <div class="social-login">
-          <button type="button" class="social-btn wechat">
-            <i data-lucide="message-circle" style="width: 20px; height: 20px;"></i>
-          </button>
-          <button type="button" class="social-btn github">
-            <i data-lucide="github" style="width: 20px; height: 20px;"></i>
-          </button>
-          <button type="button" class="social-btn google">
-            <i data-lucide="chrome" style="width: 20px; height: 20px;"></i>
-          </button>
-        </div>
-
-        <!-- 切换注册/登录 -->
-        <p class="switch-mode">
-          {{ isRegister ? '已有账号？' : '还没有账号？' }}
-          <a href="#" @click.prevent="isRegister = !isRegister">
-            {{ isRegister ? '立即登录' : '立即注册' }}
-          </a>
-        </p>
       </form>
     </div>
   </div>
@@ -212,22 +128,15 @@ const router = useRouter()
 const route = useRoute()
 const userStore = useUserStore()
 
-const isRegister = ref(false)
-const authMode = ref('account')
 const loginId = ref('')
 const password = ref('')
-const phone = ref('')
-const code = ref('')
 const userType = ref('employee')
 const showPassword = ref(false)
 const rememberMe = ref(false)
 const isLoading = ref(false)
 const loginError = ref('')
-const codeCountdown = ref(0)
 
 const errors = reactive({})
-
-let countdownTimer = null
 
 const loginIdLabel = computed(() => {
   if (userType.value === 'admin') return '管理员名称'
@@ -247,39 +156,12 @@ function getDefaultRouteByRole(type) {
   return '/'
 }
 
-function sendCode() {
-  if (!phone.value.trim()) {
-    errors.phone = '请输入手机号'
-    return
-  }
-  if (!/^1\d{10}$/.test(phone.value)) {
-    errors.phone = '手机号格式不正确'
-    return
-  }
-  errors.phone = ''
-  codeCountdown.value = 60
-  countdownTimer = setInterval(() => {
-    codeCountdown.value--
-    if (codeCountdown.value <= 0) {
-      clearInterval(countdownTimer)
-      codeCountdown.value = 0
-    }
-  }, 1000)
-}
-
 function validate() {
   Object.keys(errors).forEach(key => delete errors[key])
   loginError.value = ''
 
-  if (authMode.value === 'account') {
-    if (!loginId.value.trim()) errors.loginId = '请输入登录账号'
-    if (!password.value.trim()) errors.password = '请输入密码'
-    else if (password.value.length < 1) errors.password = '请输入密码'
-  } else {
-    if (!phone.value.trim()) errors.phone = '请输入手机号'
-    else if (!/^1\d{10}$/.test(phone.value)) errors.phone = '手机号格式不正确'
-    if (!code.value.trim()) errors.code = '请输入验证码'
-  }
+  if (!loginId.value.trim()) errors.loginId = '请输入登录账号'
+  if (!password.value.trim()) errors.password = '请输入密码'
 
   return Object.keys(errors).length === 0
 }
@@ -291,18 +173,11 @@ async function handleLogin() {
   loginError.value = ''
 
   try {
-    if (authMode.value === 'account') {
-      await userStore.login({
-        login_id: loginId.value.trim(),
-        password: password.value,
-        user_type: userType.value
-      })
-    } else {
-      // 手机验证码模式暂未实现后端接口
-      loginError.value = '手机验证码登录暂未开放'
-      isLoading.value = false
-      return
-    }
+    await userStore.login({
+      login_id: loginId.value.trim(),
+      password: password.value,
+      user_type: userType.value
+    })
 
     // 登录成功，按角色跳转到对应页面（优先使用 redirect 参数）
     const redirect = route.query.redirect || getDefaultRouteByRole(userType.value)
@@ -335,7 +210,8 @@ onMounted(() => {
 
 <style scoped>
 .login-page {
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
   display: flex;
   background: linear-gradient(135deg, #fafafa 0%, #f5f3ff 100%);
 }
@@ -483,34 +359,6 @@ onMounted(() => {
   margin-bottom: 32px;
 }
 
-.auth-tabs {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 24px;
-  background: #f3f4f6;
-  padding: 4px;
-  border-radius: 10px;
-}
-
-.auth-tab {
-  flex: 1;
-  padding: 10px 16px;
-  border: none;
-  background: transparent;
-  border-radius: 8px;
-  font-size: 14px;
-  font-weight: 600;
-  color: #6b7280;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.auth-tab.active {
-  background: white;
-  color: #111827;
-  box-shadow: var(--shadow-sm);
-}
-
 .form-group {
   margin-bottom: 20px;
 }
@@ -548,13 +396,11 @@ onMounted(() => {
   color: #9ca3af;
 }
 
-.password-input-wrapper,
-.code-input-wrapper {
+.password-input-wrapper {
   position: relative;
 }
 
-.password-toggle,
-.send-code-btn {
+.password-toggle {
   position: absolute;
   right: 12px;
   top: 50%;
@@ -567,20 +413,8 @@ onMounted(() => {
   transition: color 0.2s ease;
 }
 
-.password-toggle:hover,
-.send-code-btn:hover {
+.password-toggle:hover {
   color: #6366f1;
-}
-
-.send-code-btn {
-  font-size: 13px;
-  font-weight: 600;
-  color: #6366f1;
-}
-
-.send-code-btn:disabled {
-  color: #9ca3af;
-  cursor: not-allowed;
 }
 
 .error-message {
@@ -687,80 +521,6 @@ onMounted(() => {
 .submit-btn:disabled {
   opacity: 0.7;
   cursor: not-allowed;
-}
-
-.divider {
-  text-align: center;
-  margin: 28px 0;
-  position: relative;
-}
-
-.divider::before,
-.divider::after {
-  content: '';
-  position: absolute;
-  top: 50%;
-  width: calc(50% - 40px);
-  height: 1px;
-  background: #e5e7eb;
-}
-
-.divider::before { left: 0; }
-.divider::after { right: 0; }
-
-.divider span {
-  background: white;
-  padding: 0 16px;
-  color: #9ca3af;
-  font-size: 13px;
-  position: relative;
-  z-index: 1;
-}
-
-.social-login {
-  display: flex;
-  justify-content: center;
-  gap: 16px;
-  margin-bottom: 28px;
-}
-
-.social-btn {
-  width: 52px;
-  height: 52px;
-  border: 1.5px solid #e5e7eb;
-  border-radius: 12px;
-  background: white;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  color: #6b7280;
-  transition: all 0.2s ease;
-}
-
-.social-btn:hover {
-  border-color: #6366f1;
-  color: #6366f1;
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-md);
-}
-
-.switch-mode {
-  text-align: center;
-  font-size: 14px;
-  color: #6b7280;
-}
-
-.switch-mode a {
-  color: #6366f1;
-  text-decoration: none;
-  font-weight: 700;
-  margin-left: 4px;
-  transition: color 0.2s ease;
-}
-
-.switch-mode a:hover {
-  color: #4f46e5;
 }
 
 @media (max-width: 968px) {

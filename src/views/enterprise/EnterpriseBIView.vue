@@ -26,8 +26,8 @@
       <!-- 资源概览卡片 -->
       <div class="resource-overview-grid">
         <div
-          v-for="(resource, index) in resourceOverview"
-          :key="index"
+          v-for="resource in resourceOverview"
+          :key="resource.id"
           class="resource-card"
         >
           <div class="resource-header">
@@ -56,7 +56,7 @@
       <div class="kpi-cards-section">
         <h3 class="section-title-bi">核心KPI指标</h3>
         <div class="kpi-cards-grid">
-          <div v-for="(kpi, index) in kpiCards" :key="index" class="kpi-card">
+          <div v-for="(kpi, index) in kpiCards" :key="kpi.id" class="kpi-card">
             <div class="kpi-header">
               <span class="kpi-title">{{ kpi.title }}</span>
               <div class="kpi-icon-wrap" :style="{ background: index === 0 ? '#eef2ff' : index === 1 ? '#f0fdf4' : index === 2 ? '#fdf4ff' : index === 3 ? '#fef3e2' : '#fff7ed', color: index === 0 ? '#6366f1' : index === 1 ? '#10b981' : index === 2 ? '#a855f7' : index === 3 ? '#f59e0b' : '#ea580c' }">
@@ -195,19 +195,19 @@ const activeTab = ref('概览')
 const timeRange = ref('近30天')
 
 const resourceOverview = ref([
-  { label: '视频生成时长', value: '128.5', suffix: '/ 200 h', percent: 64.3, icon: 'clock', color: '#6366f1' },
-  { label: 'AI积分消耗', value: '85,600', suffix: '/ 120,000', percent: 71.3, icon: 'sparkles', color: '#8b5cf6' },
-  { label: '存储空间', value: '23.66', suffix: '/ 100 GB', percent: 23.7, icon: 'hard-drive', color: '#06b6d4' },
-  { label: '成员数量', value: '42', suffix: '/ 100', percent: 42, icon: 'users', color: '#10b981' },
-  { label: '账号池使用率', value: '42', suffix: '/ 50 个', percent: 84, icon: 'key-round', color: '#f59e0b' }
+  { id: 'video-time', label: '视频生成时长', value: '128.5', suffix: '/ 200 h', percent: 64.3, icon: 'clock', color: '#6366f1' },
+  { id: 'ai-points', label: 'AI积分消耗', value: '85,600', suffix: '/ 120,000', percent: 71.3, icon: 'sparkles', color: '#8b5cf6' },
+  { id: 'storage', label: '存储空间', value: '23.66', suffix: '/ 100 GB', percent: 23.7, icon: 'hard-drive', color: '#06b6d4' },
+  { id: 'members', label: '成员数量', value: '42', suffix: '/ 100', percent: 42, icon: 'users', color: '#10b981' },
+  { id: 'account-pool', label: '账号池使用率', value: '42', suffix: '/ 50 个', percent: 84, icon: 'key-round', color: '#f59e0b' }
 ])
 
 const kpiCards = ref([
-  { title: '总消耗额度', value: 198560, unit: '¥', change: 12.5, trend: 'up', icon: 'banknote' },
-  { title: '活跃账号数', value: 38, unit: '个', change: 2, trend: 'up', icon: 'users' },
-  { title: '生成内容数', value: 1256, unit: '个', change: 8.3, trend: 'up', icon: 'sparkles' },
-  { title: '平均单次成本', value: 102.3, unit: '¥', change: -5.2, trend: 'down', icon: 'trending-down' },
-  { title: '账号池使用率', value: '42/50', unit: '个', percent: 84, change: 5, trend: 'up', icon: 'key-round' }
+  { id: 'total-cost', title: '总消耗额度', value: 198560, unit: '¥', change: 12.5, trend: 'up', icon: 'banknote' },
+  { id: 'active-accounts', title: '活跃账号数', value: 38, unit: '个', change: 2, trend: 'up', icon: 'users' },
+  { id: 'generated-content', title: '生成内容数', value: 1256, unit: '个', change: 8.3, trend: 'up', icon: 'sparkles' },
+  { id: 'avg-cost', title: '平均单次成本', value: 102.3, unit: '¥', change: -5.2, trend: 'down', icon: 'trending-down' },
+  { id: 'pool-usage', title: '账号池使用率', value: '42/50', unit: '个', percent: 84, change: 5, trend: 'up', icon: 'key-round' }
 ])
 
 const accountPool = ref({
@@ -430,7 +430,18 @@ const initModelChart = () => {
       radius: ['45%', '70%'],
       center: ['50%', '50%'],
       avoidLabelOverlap: false,
-      label: { show: false },
+      label: {
+        show: true,
+        formatter: '{b}\n{d}%',
+        fontSize: 12,
+        color: '#374151',
+        fontWeight: 500
+      },
+      labelLine: {
+        show: true,
+        length: 8,
+        length2: 8
+      },
       emphasis: {
         label: { show: true, fontSize: 14, fontWeight: 'bold' }
       },

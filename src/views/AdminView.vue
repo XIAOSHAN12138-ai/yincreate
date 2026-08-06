@@ -232,6 +232,155 @@
         </div>
       </div>
 
+      <!-- ========== 模型管理 ========== -->
+      <div v-if="activeTab === 'model'" class="tab-content">
+        <div class="model-stats-bar">
+          <div class="model-stat">
+            <span class="ms-label">模型总数</span>
+            <span class="ms-val">{{ modelList.length }}</span>
+          </div>
+          <div class="model-stat">
+            <span class="ms-label">已启用</span>
+            <span class="ms-val ms-green">{{ modelList.filter(m => m.is_enabled).length }}</span>
+          </div>
+          <div class="model-stat">
+            <span class="ms-label">已停用</span>
+            <span class="ms-val ms-red">{{ modelList.filter(m => !m.is_enabled).length }}</span>
+          </div>
+          <div class="model-stat">
+            <span class="ms-label">图片模型</span>
+            <span class="ms-val ms-blue">{{ modelList.filter(m => m.media_type === 'image').length }}</span>
+          </div>
+          <div class="model-stat">
+            <span class="ms-label">视频模型</span>
+            <span class="ms-val ms-purple">{{ modelList.filter(m => m.media_type === 'video').length }}</span>
+          </div>
+          <div class="model-stat">
+            <span class="ms-label">音频模型</span>
+            <span class="ms-val ms-amber">{{ modelList.filter(m => m.media_type === 'audio').length }}</span>
+          </div>
+        </div>
+
+        <div class="search-action-bar">
+          <div class="table-header-row">
+            <h3 class="table-title">模型列表（共 {{ filteredModels.length }} 个）</h3>
+            <div class="header-actions" style="position:relative;z-index:10;">
+              <div class="search-wrap-member">
+                <i data-lucide="search" style="width: 16px; height: 16px; color: #9ca3af;"></i>
+                <input v-model="modelSearch" type="text" placeholder="搜索模型ID/名称..." class="search-input-member" @input="onModelSearchChange">
+              </div>
+              <select v-model="modelVendorFilter" class="filter-select-member" @change="onModelFilterChange('vendor', $event)">
+                <option value="">全部厂商</option>
+                <option v-for="v in vendorOptions" :key="v.value" :value="v.value">{{ v.label }}</option>
+              </select>
+              <select v-model="modelMediaTypeFilter" class="filter-select-member" @change="onModelFilterChange('mediaType', $event)">
+                <option value="">全部类型</option>
+                <option v-for="t in mediaTypeOptions" :key="t.value" :value="t.value">{{ t.label }}</option>
+              </select>
+              <select v-model="modelStatusFilter" class="filter-select-member" @change="onModelFilterChange('status', $event)">
+                <option value="">全部状态</option>
+                <option v-for="s in statusOptions" :key="s.value" :value="s.value">{{ s.label }}</option>
+              </select>
+              <select v-model="modelEnabledFilter" class="filter-select-member" @change="onModelFilterChange('enabled', $event)">
+                <option value="">全部启停</option>
+                <option value="true">已启用</option>
+                <option value="false">已停用</option>
+              </select>
+              <label class="checkbox-wrap" style="margin-left: 8px;">
+                <input type="checkbox" v-model="showDeletedModels" @change="toggleDeletedView">
+                <span class="checkbox-label">回收站</span>
+              </label>
+              <button class="export-btn" @click="handleSyncFromJson" title="从 JSON 重新灌入模型库">
+                <i data-lucide="refresh-cw" style="width: 14px; height: 14px;"></i> 同步JSON
+              </button>
+              <button class="btn-add-new" @click="openModelModal()">
+                <i data-lucide="plus" style="width: 14px; height: 14px;"></i> 新增模型
+              </button>
+            </div>
+          </div>
+
+          <table class="account-table model-table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>模型ID</th>
+                <th>展示名</th>
+                <th>厂商</th>
+                <th>类型</th>
+                <th>定价</th>
+                <th>状态</th>
+                <th>声音模式</th>
+                <th>最大时长</th>
+                <th>启停</th>
+                <th>更新时间</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="m in pagedModels" :key="m.id" :class="{ 'deleted-row': m.deleted_at }">
+                <td>{{ m.id }}<span v-if="m.deleted_at" class="deleted-badge" title="已软删">已删</span></td>
+                <td><code class="mono-text">{{ m.model_id }}</code></td>
+                <td>
+                  <div class="model-name-cell">
+                    <strong>{{ m.display_name }}</strong>
+                    <span v-if="m.tags && m.tags.length" class="model-tags-mini">
+                      <span v-for="t in m.tags.slice(0,2)" :key="t" class="tag-mini">{{ t }}</span>
+                    </span>
+                  </div>
+                </td>
+                <td><span :class="['vendor-badge', `vendor-${m.vendor}`]">{{ getVendorLabel(m.vendor) }}</span></td>
+                <td><span :class="['media-type-badge', `media-${m.media_type}`]">{{ getMediaTypeLabel(m.media_type) }}</span></td>
+                <td class="price-cell">
+                  <div v-if="m.price_per_second != null" class="price-line">
+                    <span class="price-val">{{ m.price_per_second }}积分/秒</span>
+                    <span v-if="m.price_multiplier && m.price_multiplier !== 1" class="price-mult">×{{ m.price_multiplier }}</span>
+                  </div>
+                  <div v-else-if="m.price_per_request != null" class="price-line">
+                    <span class="price-val">{{ m.price_per_request }}积分/次</span>
+                    <span v-if="m.price_multiplier && m.price_multiplier !== 1" class="price-mult">×{{ m.price_multiplier }}</span>
+                  </div>
+                  <div v-else class="price-line"><span class="price-val text-secondary-small">未定价</span></div>
+                  <div v-if="m.price_tiers && Object.keys(m.price_tiers).length" class="price-tiers-mini">
+                    {{ Object.keys(m.price_tiers).length }} 档分级
+                  </div>
+                </td>
+                <td><span :class="['status-badge', getModelStatusClass(m.status)]">{{ getStatusLabel(m.status) }}</span></td>
+                <td><span :class="['sound-mode-badge', `sm-${m.sound_mode || 'hidden'}`]">{{ getSoundModeLabel(m.sound_mode) }}</span></td>
+                <td>{{ m.max_duration ? m.max_duration + 's' : '-' }}</td>
+                <td>
+                  <label class="switch switch-mini" :title="m.is_enabled ? '点击停用' : '点击启用'">
+                    <input type="checkbox" :checked="m.is_enabled" @change="toggleModelEnabled(m)">
+                    <span class="slider"></span>
+                  </label>
+                </td>
+                <td class="text-secondary-small">{{ m.updated_at }}</td>
+                <td class="action-buttons">
+                  <button class="detail-btn" @click="viewModelDetail(m)">详情</button>
+                  <button class="edit-btn-action" @click="openModelModal(m)">编辑</button>
+                  <button class="edit-btn-action" style="color:#0ea5e9;background:#e0f2fe;" @click="viewModelUsage(m)">用量</button>
+                  <button class="edit-btn-action" style="color:#7c3aed;background:#ede9fe;" @click="viewModelChangelog(m)">历史</button>
+                  <button class="edit-btn-action" style="color:#f59e0b;background:#fef3c7;" @click="openCloneModal(m)" v-if="!m.deleted_at">克隆</button>
+                  <template v-if="m.deleted_at">
+                    <button class="edit-btn-action" style="color:#10b981;background:#dcfce7;" @click="restoreModel(m)">恢复</button>
+                    <button class="delete-btn-action" @click="hardDeleteModel(m)">硬删</button>
+                  </template>
+                  <button class="delete-btn-action" @click="deleteModel(m)" v-else>删除</button>
+                </td>
+              </tr>
+              <tr v-if="filteredModels.length === 0">
+                <td colspan="10" class="empty-row">暂无模型数据</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div class="pagination-dept">
+            <button class="page-btn-dept" :disabled="modelPage === 1" @click="modelPage--"><i data-lucide="chevron-left" style="width: 14px; height: 14px;"></i></button>
+            <button v-for="p in modelTotalPages" :key="p" :class="['page-num-dept', { active: modelPage === p }]" @click="modelPage = p">{{ p }}</button>
+            <button class="page-btn-dept" :disabled="modelPage === modelTotalPages" @click="modelPage++"><i data-lucide="chevron-right" style="width: 14px; height: 14px;"></i></button>
+          </div>
+        </div>
+      </div>
+
       <!-- ========== 操作日志 ========== -->
       <div v-if="activeTab === 'logs'" class="tab-content">
         <div class="search-action-bar">
@@ -577,19 +726,422 @@
           </div>
         </div>
       </Teleport>
+
+      <!-- ========== 模型新增/编辑弹窗 ========== -->
+      <Teleport to="body">
+        <div v-if="showModelModal" class="modal-overlay" @click.self="closeModelModal">
+          <div class="modal-container-add modal-xl">
+            <div class="modal-header">
+              <h3 class="modal-title">{{ editingModel ? '编辑模型' : '新增模型' }}</h3>
+              <button class="modal-close-btn" @click="closeModelModal"><i data-lucide="x" style="width: 18px; height: 18px;"></i></button>
+            </div>
+            <div class="modal-body">
+              <!-- 基础信息 -->
+              <h4 class="form-section-title"><i data-lucide="info" style="width: 14px; height: 14px;"></i> 基础信息</h4>
+              <div class="form-row-2">
+                <div class="form-group">
+                  <label class="form-label">模型ID (model_id) <span class="required">*</span></label>
+                  <input type="text" v-model="modelForm.model_id" placeholder="例如 kling_3_0" class="form-input" :disabled="!!editingModel">
+                  <span class="form-hint-text">业务唯一标识，创建后不可修改</span>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">展示名 (display_name) <span class="required">*</span></label>
+                  <input type="text" v-model="modelForm.display_name" placeholder="例如 Kling 3.0" class="form-input">
+                </div>
+              </div>
+              <div class="form-row-2">
+                <div class="form-group">
+                  <label class="form-label">模型名 (model_name) <span class="required">*</span></label>
+                  <input type="text" v-model="modelForm.model_name" placeholder="例如 Kling" class="form-input">
+                </div>
+                <div class="form-group">
+                  <label class="form-label">版本号 (model_version) <span class="required">*</span></label>
+                  <input type="text" v-model="modelForm.model_version" placeholder="例如 3.0" class="form-input">
+                </div>
+              </div>
+              <div class="form-row-3">
+                <div class="form-group">
+                  <label class="form-label">厂商 (vendor) <span class="required">*</span></label>
+                  <select v-model="modelForm.vendor" class="form-select">
+                    <option v-for="v in vendorOptions" :key="v.value" :value="v.value">{{ v.label }}</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">类型 (media_type) <span class="required">*</span></label>
+                  <select v-model="modelForm.media_type" class="form-select">
+                    <option v-for="t in mediaTypeOptions" :key="t.value" :value="t.value">{{ t.label }}</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">状态 (status)</label>
+                  <select v-model="modelForm.status" class="form-select">
+                    <option v-for="s in statusOptions" :key="s.value" :value="s.value">{{ s.label }}</option>
+                  </select>
+                </div>
+              </div>
+              <div class="form-row-2">
+                <div class="form-group">
+                  <label class="form-label">厂商展示名</label>
+                  <input type="text" v-model="modelForm.vendor_display_name" placeholder="例如 腾讯云 VOD" class="form-input">
+                </div>
+                <div class="form-group">
+                  <label class="form-label">可用区域</label>
+                  <input type="text" v-model="modelForm.availability_region" placeholder="例如 ap-guangzhou" class="form-input">
+                </div>
+              </div>
+              <div class="form-group">
+                <label class="form-label">描述</label>
+                <textarea v-model="modelForm.description" placeholder="模型描述（后台自由文本）" class="form-textarea" rows="2"></textarea>
+              </div>
+              <div class="form-group">
+                <label class="form-label">标签（逗号分隔）</label>
+                <input type="text" v-model="modelForm.tagsText" placeholder="例如 高清,快速,VIP" class="form-input">
+              </div>
+
+              <!-- 能力配置 -->
+              <h4 class="form-section-title"><i data-lucide="sliders-horizontal" style="width: 14px; height: 14px;"></i> 能力配置</h4>
+              <div class="form-group">
+                <label class="form-label">支持特性 (supported_features)</label>
+                <div class="checkbox-group">
+                  <label v-for="f in featureOptions" :key="f" class="checkbox-item">
+                    <input type="checkbox" :value="f" v-model="modelForm.supported_features">
+                    <span>{{ f }}</span>
+                  </label>
+                </div>
+              </div>
+              <div class="form-group">
+                <label class="form-label">前端用户功能 (ui_features)</label>
+                <span class="form-hint-text">控制生成页面中该模型可选的特色功能</span>
+                <div class="checkbox-group">
+                  <template v-if="modelForm.media_type">
+                    <label v-for="f in filteredUiFeatureOptions" :key="f.id" class="checkbox-item">
+                      <input type="checkbox" :value="f.id" v-model="modelForm.ui_features">
+                      <span>{{ f.label }}</span>
+                    </label>
+                  </template>
+                  <span v-else class="form-hint-text">请先选择模型类型</span>
+                </div>
+              </div>
+              <div class="form-row-2">
+                <div class="form-group">
+                  <label class="form-label">支持分辨率（逗号分隔）</label>
+                  <input type="text" v-model="modelForm.supported_resolutions_text" placeholder="720P,1080P,2K,4K" class="form-input">
+                </div>
+                <div class="form-group">
+                  <label class="form-label">支持宽高比（逗号分隔）</label>
+                  <input type="text" v-model="modelForm.supported_aspect_ratios_text" placeholder="16:9,9:16,1:1" class="form-input">
+                </div>
+              </div>
+              <div class="form-row-3">
+                <div class="form-group">
+                  <label class="form-label">最大宽度</label>
+                  <input type="number" v-model.number="modelForm.max_width" placeholder="4096" class="form-input" min="256" max="4096">
+                </div>
+                <div class="form-group">
+                  <label class="form-label">最大高度</label>
+                  <input type="number" v-model.number="modelForm.max_height" placeholder="4096" class="form-input" min="256" max="4096">
+                </div>
+                <div class="form-group">
+                  <label class="form-label">最大时长(秒)</label>
+                  <input type="number" v-model.number="modelForm.max_duration" placeholder="10" class="form-input" min="1">
+                </div>
+              </div>
+              <div class="form-row-3">
+                <div class="form-group">
+                  <label class="form-label">最小宽度</label>
+                  <input type="number" v-model.number="modelForm.min_width" placeholder="256" class="form-input" min="256" max="4096">
+                </div>
+                <div class="form-group">
+                  <label class="form-label">最小高度</label>
+                  <input type="number" v-model.number="modelForm.min_height" placeholder="256" class="form-input" min="256" max="4096">
+                </div>
+                <div class="form-group">
+                  <label class="form-label">最大帧率</label>
+                  <input type="number" v-model.number="modelForm.max_fps" placeholder="30" class="form-input" min="1" max="60">
+                </div>
+              </div>
+              <div class="form-group">
+                <label class="form-label">声音模式</label>
+                <select v-model="modelForm.sound_mode" class="form-select">
+                  <option :value="null">不适用（非视频模型）</option>
+                  <option v-for="sm in soundModeOptions" :key="sm.value" :value="sm.value">{{ sm.label }}</option>
+                </select>
+                <span class="form-hint-text">仅视频模型有效</span>
+              </div>
+
+              <!-- 积分定价配置 -->
+              <h4 class="form-section-title"><i data-lucide="badge-dollar-sign" style="width: 14px; height: 14px;"></i> 积分定价配置</h4>
+              <div class="form-row-3">
+                <div class="form-group">
+                  <label class="form-label">按次消耗 (price_per_request)</label>
+                  <input type="number" step="1" v-model.number="modelForm.price_per_request" placeholder="15（图像/音频）" class="form-input" min="0">
+                  <span class="form-hint-text">每次生成消耗的积分数</span>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">按秒消耗 (price_per_second)</label>
+                  <input type="number" step="1" v-model.number="modelForm.price_per_second" placeholder="50（视频）" class="form-input" min="0">
+                  <span class="form-hint-text">每秒生成消耗的积分数</span>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">消耗倍率 (price_multiplier)</label>
+                  <input type="number" step="0.01" v-model.number="modelForm.price_multiplier" placeholder="1.00" class="form-input" min="0">
+                  <span class="form-hint-text">1.00=原价，1.20=加价20%</span>
+                </div>
+              </div>
+              <div class="form-row-2">
+                <div class="form-group">
+                  <label class="form-label">积分单位</label>
+                  <select v-model="modelForm.currency" class="form-input">
+                    <option value="CNY">CNY (人民币)</option>
+                    <option value="POINTS">POINTS (积分)</option>
+                    <option value="USD">USD (美元)</option>
+                    <option value="TOKENS">TOKENS (代币)</option>
+                  </select>
+                  <span class="form-hint-text">选择计费货币单位</span>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">分级定价 (price_tiers JSON)</label>
+                  <textarea v-model="modelForm.price_tiers_text" placeholder='{"720p":30,"1080p":50,"4K":240}' class="form-textarea" rows="2"></textarea>
+                  <span class="form-hint-text">键=分辨率，值=每秒/每次积分数。留空则使用上面的按次/按秒价</span>
+                </div>
+              </div>
+
+              <!-- 启停 -->
+              <h4 class="form-section-title"><i data-lucide="power" style="width: 14px; height: 14px;"></i> 启停控制</h4>
+              <div class="form-group">
+                <label class="switch">
+                  <input type="checkbox" v-model="modelForm.is_enabled">
+                  <span class="slider"></span>
+                </label>
+                <span class="switch-label-text">{{ modelForm.is_enabled ? '已启用（前端下拉中可见）' : '已停用（前端下拉中隐藏）' }}</span>
+              </div>
+            </div>
+            <div class="modal-footer">
+              <button class="btn-cancel" @click="closeModelModal">取消</button>
+              <button class="btn-submit" @click="submitModel">{{ editingModel ? '保存修改' : '确认创建' }}</button>
+            </div>
+          </div>
+        </div>
+      </Teleport>
+
+      <!-- ========== 模型详情弹窗 ========== -->
+      <Teleport to="body">
+        <div v-if="showModelDetailModal && selectedModelDetail" class="modal-overlay" @click.self="showModelDetailModal = false">
+          <div class="modal-container-detail">
+            <div class="modal-header">
+              <h3 class="modal-title">模型详情 - {{ selectedModelDetail.display_name }}</h3>
+              <button class="modal-close-btn" @click="showModelDetailModal = false"><i data-lucide="x" style="width: 18px; height: 18px;"></i></button>
+            </div>
+            <div class="modal-body">
+              <div class="detail-grid">
+                <div class="detail-item"><span class="detail-label">ID</span><span class="detail-value">#{{ selectedModelDetail.id }}</span></div>
+                <div class="detail-item"><span class="detail-label">模型ID</span><span class="detail-value mono-text">{{ selectedModelDetail.model_id }}</span></div>
+                <div class="detail-item"><span class="detail-label">模型名</span><span class="detail-value">{{ selectedModelDetail.model_name }}</span></div>
+                <div class="detail-item"><span class="detail-label">版本号</span><span class="detail-value">{{ selectedModelDetail.model_version }}</span></div>
+                <div class="detail-item"><span class="detail-label">展示名</span><span class="detail-value">{{ selectedModelDetail.display_name }}</span></div>
+                <div class="detail-item"><span class="detail-label">厂商</span><span class="detail-value">{{ getVendorLabel(selectedModelDetail.vendor) }}</span></div>
+                <div class="detail-item"><span class="detail-label">厂商展示名</span><span class="detail-value">{{ selectedModelDetail.vendor_display_name || '-' }}</span></div>
+                <div class="detail-item"><span class="detail-label">类型</span><span class="detail-value">{{ getMediaTypeLabel(selectedModelDetail.media_type) }}</span></div>
+                <div class="detail-item"><span class="detail-label">状态</span><span :class="['status-badge', getModelStatusClass(selectedModelDetail.status)]">{{ getStatusLabel(selectedModelDetail.status) }}</span></div>
+                <div class="detail-item"><span class="detail-label">启用</span><span :class="['status-badge', selectedModelDetail.is_enabled ? 'status-active' : 'status-expired']">{{ selectedModelDetail.is_enabled ? '已启用' : '已停用' }}</span></div>
+                <div class="detail-item"><span class="detail-label">可用区域</span><span class="detail-value">{{ selectedModelDetail.availability_region || '-' }}</span></div>
+                <div class="detail-item"><span class="detail-label">积分单位</span><span class="detail-value">{{ selectedModelDetail.currency || 'POINTS' }}</span></div>
+                <div class="detail-item"><span class="detail-label">按次消耗</span><span class="detail-value">{{ selectedModelDetail.price_per_request != null ? selectedModelDetail.price_per_request + '积分' : '-' }}</span></div>
+                <div class="detail-item"><span class="detail-label">按秒消耗</span><span class="detail-value">{{ selectedModelDetail.price_per_second != null ? selectedModelDetail.price_per_second + '积分' : '-' }}</span></div>
+                <div class="detail-item"><span class="detail-label">消耗倍率</span><span class="detail-value">×{{ selectedModelDetail.price_multiplier ?? 1 }}</span></div>
+                <div class="detail-item"><span class="detail-label">最大尺寸</span><span class="detail-value">{{ selectedModelDetail.max_width || '-' }}×{{ selectedModelDetail.max_height || '-' }}</span></div>
+                <div class="detail-item"><span class="detail-label">最小尺寸</span><span class="detail-value">{{ selectedModelDetail.min_width || '-' }}×{{ selectedModelDetail.min_height || '-' }}</span></div>
+                <div class="detail-item"><span class="detail-label">最大时长</span><span class="detail-value">{{ selectedModelDetail.max_duration || '-' }} 秒</span></div>
+                <div class="detail-item"><span class="detail-label">最大帧率</span><span class="detail-value">{{ selectedModelDetail.max_fps || '-' }} fps</span></div>
+                <div class="detail-item detail-full"><span class="detail-label">支持特性</span><span class="detail-value">{{ (selectedModelDetail.supported_features || []).join('、') || '-' }}</span></div>
+                <div class="detail-item detail-full"><span class="detail-label">支持分辨率</span><span class="detail-value">{{ (selectedModelDetail.supported_resolutions || []).join('、') || '-' }}</span></div>
+                <div class="detail-item detail-full"><span class="detail-label">支持宽高比</span><span class="detail-value">{{ (selectedModelDetail.supported_aspect_ratios || []).join('、') || '-' }}</span></div>
+                <div class="detail-item detail-full"><span class="detail-label">标签</span><span class="detail-value">{{ (selectedModelDetail.tags || []).join('、') || '-' }}</span></div>
+                <div class="detail-item detail-full"><span class="detail-label">分级定价</span><span class="detail-value mono-text">{{ selectedModelDetail.price_tiers ? JSON.stringify(selectedModelDetail.price_tiers) : '-' }}</span></div>
+                <div class="detail-item detail-full"><span class="detail-label">描述</span><span class="detail-value">{{ selectedModelDetail.description || '-' }}</span></div>
+                <div class="detail-item"><span class="detail-label">创建时间</span><span class="detail-value">{{ selectedModelDetail.created_at }}</span></div>
+                <div class="detail-item"><span class="detail-label">更新时间</span><span class="detail-value">{{ selectedModelDetail.updated_at }}</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </Teleport>
+
+      <!-- ========== 模型用量统计弹窗 ========== -->
+      <Teleport to="body">
+        <div v-if="showModelUsageModal && selectedModelUsage" class="modal-overlay" @click.self="showModelUsageModal = false">
+          <div class="modal-container-detail">
+            <div class="modal-header">
+              <h3 class="modal-title">用量统计 - {{ selectedModelUsage.model_id }}</h3>
+              <button class="modal-close-btn" @click="showModelUsageModal = false"><i data-lucide="x" style="width: 18px; height: 18px;"></i></button>
+            </div>
+            <div class="modal-body">
+              <div class="usage-controls">
+                <label class="form-label">统计天数：</label>
+                <select v-model="usageDays" class="form-select usage-days-select" @change="reloadModelUsage">
+                  <option :value="7">最近 7 天</option>
+                  <option :value="30">最近 30 天</option>
+                  <option :value="90">最近 90 天</option>
+                </select>
+              </div>
+              <div class="usage-stats-grid">
+                <div class="usage-stat-card"><span class="us-label">总请求数</span><span class="us-val">{{ selectedModelUsage.aggregate.total_requests }}</span></div>
+                <div class="usage-stat-card us-success"><span class="us-label">成功</span><span class="us-val">{{ selectedModelUsage.aggregate.successful_requests }}</span></div>
+                <div class="usage-stat-card us-fail"><span class="us-label">失败</span><span class="us-val">{{ selectedModelUsage.aggregate.failed_requests }}</span></div>
+                <div class="usage-stat-card"><span class="us-label">平均耗时(秒)</span><span class="us-val">{{ selectedModelUsage.aggregate.avg_processing_time }}</span></div>
+                <div class="usage-stat-card us-cost"><span class="us-label">总成本(¥)</span><span class="us-val">{{ selectedModelUsage.aggregate.total_cost }}</span></div>
+              </div>
+              <h4 class="detail-section-title">按小时聚合（最近 24 条）</h4>
+              <div class="orders-table-wrap">
+                <table class="orders-table">
+                  <thead>
+                    <tr><th>日期</th><th>小时</th><th>请求数</th><th>成功</th><th>失败</th><th>耗时(秒)</th><th>成本(¥)</th></tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="(h, idx) in (selectedModelUsage.hourly || []).slice(0, 24)" :key="idx">
+                      <td>{{ h.stat_date }}</td>
+                      <td>{{ h.stat_hour }}:00</td>
+                      <td>{{ h.total_requests }}</td>
+                      <td class="text-green">{{ h.successful_requests }}</td>
+                      <td class="text-red">{{ h.failed_requests }}</td>
+                      <td>{{ h.total_processing_time }}</td>
+                      <td>{{ h.total_cost }}</td>
+                    </tr>
+                    <tr v-if="!(selectedModelUsage.hourly && selectedModelUsage.hourly.length)">
+                      <td colspan="7" class="empty-row">暂无用量数据</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </Teleport>
+
+      <!-- ========== 模型变更历史弹窗 ========== -->
+      <Teleport to="body">
+        <div v-if="showModelChangelogModal && selectedModelChangelog" class="modal-overlay" @click.self="showModelChangelogModal = false">
+          <div class="modal-container-detail">
+            <div class="modal-header">
+              <h3 class="modal-title">变更历史 - {{ selectedModelChangelog.model_id }}</h3>
+              <button class="modal-close-btn" @click="showModelChangelogModal = false"><i data-lucide="x" style="width: 18px; height: 18px;"></i></button>
+            </div>
+            <div class="modal-body">
+              <div class="changelog-timeline">
+                <div v-for="log in selectedModelChangelog.items" :key="log.id" class="changelog-item">
+                  <div class="changelog-dot" :class="`cl-${log.change_type}`"></div>
+                  <div class="changelog-content">
+                    <div class="changelog-header">
+                      <span :class="['log-type-badge', `log-${log.change_type === 'created' ? 'create' : log.change_type === 'updated' ? 'update' : log.change_type === 'disabled' ? 'delete' : 'status'}`]">{{ log.change_type }}</span>
+                      <span class="changelog-time">{{ log.created_at }}</span>
+                    </div>
+                    <div class="changelog-desc">{{ log.change_description }}</div>
+                    <div class="changelog-operator">操作人：{{ log.operator_name || '-' }}</div>
+                    <details v-if="log.changed_fields" class="changelog-fields">
+                      <summary>查看变更字段</summary>
+                      <pre class="changelog-json">{{ JSON.stringify(log.changed_fields, null, 2) }}</pre>
+                    </details>
+                  </div>
+                </div>
+                <div v-if="!selectedModelChangelog.items || selectedModelChangelog.items.length === 0" class="empty-row">
+                  暂无变更记录
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </Teleport>
+
+      <!-- ========== 克隆模型弹窗 ========== -->
+      <Teleport to="body">
+        <div v-if="showCloneModal" class="modal-overlay" @click.self="closeCloneModal">
+          <div class="modal-container-add">
+            <div class="modal-header">
+              <h3 class="modal-title">克隆模型 - {{ cloneSourceModel?.display_name }}</h3>
+              <button class="modal-close-btn" @click="closeCloneModal"><i data-lucide="x" style="width: 18px; height: 18px;"></i></button>
+            </div>
+            <div class="modal-body">
+              <div class="clone-info-box">
+                <div class="info-row"><span class="info-label">源模型ID：</span><code class="mono-text">{{ cloneSourceModel?.model_id }}</code></div>
+                <div class="info-row"><span class="info-label">厂商：</span>{{ getVendorLabel(cloneSourceModel?.vendor) }}</div>
+                <div class="info-row"><span class="info-label">类型：</span>{{ getMediaTypeLabel(cloneSourceModel?.media_type) }}</div>
+              </div>
+              <div class="form-group">
+                <label class="form-label">新模型ID (new_model_id) <span class="required">*</span></label>
+                <input type="text" v-model="cloneForm.new_model_id" placeholder="例如 gp-im-2（全局唯一）" class="form-input">
+                <span class="form-hint-text">新模型的唯一标识，不能与源模型相同</span>
+              </div>
+              <div class="form-row-2">
+                <div class="form-group">
+                  <label class="form-label">展示名</label>
+                  <input type="text" v-model="cloneForm.display_name" placeholder="留空则沿用源模型展示名" class="form-input">
+                </div>
+                <div class="form-group">
+                  <label class="form-label">模型名</label>
+                  <input type="text" v-model="cloneForm.model_name" placeholder="留空则沿用源模型名" class="form-input">
+                </div>
+              </div>
+              <div class="form-row-2">
+                <div class="form-group">
+                  <label class="form-label">版本号</label>
+                  <input type="text" v-model="cloneForm.model_version" placeholder="留空则沿用源版本" class="form-input">
+                </div>
+                <div class="form-group">
+                  <label class="form-label">按次消耗</label>
+                  <input type="number" step="1" v-model.number="cloneForm.price_per_request" placeholder="留空则沿用源定价" class="form-input" min="0">
+                </div>
+              </div>
+              <div class="form-row-2">
+                <div class="form-group">
+                  <label class="form-label">按秒消耗</label>
+                  <input type="number" step="1" v-model.number="cloneForm.price_per_second" placeholder="留空则沿用源定价" class="form-input" min="0">
+                </div>
+                <div class="form-group">
+                  <label class="form-label">消耗倍率</label>
+                  <input type="number" step="0.01" v-model.number="cloneForm.price_multiplier" placeholder="留空则沿用源倍率" class="form-input" min="0">
+                </div>
+              </div>
+              <div class="form-group">
+                <label class="form-label">描述</label>
+                <textarea v-model="cloneForm.description" placeholder="留空则沿用源描述" class="form-textarea" rows="2"></textarea>
+              </div>
+              <div class="clone-note">
+                <i data-lucide="info" style="width:14px;height:14px;color:#f59e0b;"></i>
+                <span>克隆后新模型默认 status=deprecated、is_enabled=false，需手动启用</span>
+              </div>
+            </div>
+            <div class="modal-footer">
+              <button class="btn-cancel" @click="closeCloneModal">取消</button>
+              <button class="btn-submit" @click="submitClone">确认克隆</button>
+            </div>
+          </div>
+        </div>
+      </Teleport>
     </div>
   </AppLayout>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import AppLayout from '../components/layout/AppLayout.vue'
 import { getAnnouncementsApi, createAnnouncementApi, updateAnnouncementApi, deleteAnnouncementApi } from '../api/announcement'
+import {
+  getAdminModelsApi, getAdminModelDetailApi, createAdminModelApi, updateAdminModelApi,
+  enableAdminModelApi, disableAdminModelApi, deleteAdminModelApi, getAdminModelUsageApi, getAdminModelChangelogApi,
+  syncAdminModelsFromJsonApi, cloneAdminModelApi, restoreAdminModelApi,
+  VENDOR_OPTIONS, MEDIA_TYPE_OPTIONS, STATUS_OPTIONS, FEATURE_OPTIONS,
+  SOUND_MODE_OPTIONS, FEATURE_UI_OPTIONS,
+  getVendorLabel, getMediaTypeLabel, getStatusLabel, getSoundModeLabel
+} from '../api/adminModels'
+
+// 防止组件卸载后异步回调修改 state
+const isUnmounted = ref(false)
 
 const tabs = [
   { key: 'overview', label: '系统概览', icon: 'layout-dashboard' },
   { key: 'company', label: '公司账号', icon: 'building-2' },
   { key: 'user', label: '普通账号', icon: 'users' },
+  { key: 'model', label: '模型管理', icon: 'cpu' },
   { key: 'announcement', label: '公告管理', icon: 'megaphone' },
   { key: 'logs', label: '操作日志', icon: 'scroll-text' },
   { key: 'settings', label: '系统设置', icon: 'settings' }
@@ -861,7 +1413,10 @@ const announcementForm = ref({
 async function fetchAnnouncements() {
   try {
     const res = await getAnnouncementsApi({ page: 1, page_size: 100 })
-    announcementList.value = res.data.items || []
+    if (isUnmounted.value) return
+    const body = res.data
+    const data = (body && body.code !== undefined && body.data !== undefined) ? body.data : body
+    announcementList.value = data.items || []
   } catch (e) {
     console.error('获取公告列表失败:', e)
   }
@@ -933,9 +1488,612 @@ function deleteAnnouncement(ann) {
   nextTick(() => { if (window.lucide) lucide.createIcons() })
 }
 
+// ==================== 模型管理 ====================
+const vendorOptions = VENDOR_OPTIONS
+const mediaTypeOptions = MEDIA_TYPE_OPTIONS
+const statusOptions = STATUS_OPTIONS
+const featureOptions = FEATURE_OPTIONS
+const soundModeOptions = SOUND_MODE_OPTIONS
+const uiFeatureOptions = FEATURE_UI_OPTIONS
+const filteredUiFeatureOptions = computed(() => {
+  if (!modelForm.value?.media_type) return []
+  return uiFeatureOptions.filter(f => f.media_type === modelForm.value.media_type)
+})
+
+const modelList = ref([])
+const modelSearch = ref('')
+const modelVendorFilter = ref('')
+const modelMediaTypeFilter = ref('')
+const modelStatusFilter = ref('')
+const modelEnabledFilter = ref('')
+const modelPage = ref(1)
+const modelPageSize = 10
+const showDeletedModels = ref(false) // 回收站视图开关
+
+// 克隆模型相关变量
+const showCloneModal = ref(false)
+const cloneSourceModel = ref(null)
+const cloneForm = ref({
+  new_model_id: '',
+  display_name: '',
+  model_name: '',
+  model_version: '',
+  price_per_request: null,
+  price_per_second: null,
+  price_multiplier: null,
+  description: ''
+})
+
+function getModelStatusClass(s) {
+  if (s === 'active') return 'status-active'
+  if (s === 'deprecated') return 'status-warning'
+  return 'status-expired'
+}
+
+const filteredModels = computed(() => {
+  console.log('[模型筛选] 重新计算 - 原始数据:', modelList.value.length,
+    '| 搜索:', modelSearch.value,
+    '| 厂商:', modelVendorFilter.value,
+    '| 类型:', modelMediaTypeFilter.value,
+    '| 状态:', modelStatusFilter.value,
+    '| 启停:', modelEnabledFilter.value)
+
+  let result = [...modelList.value] // 创建副本避免修改原数组
+
+  if (modelSearch.value && modelSearch.value.trim()) {
+    const q = modelSearch.value.toLowerCase().trim()
+    result = result.filter(m =>
+      String(m.model_id || '').toLowerCase().includes(q) ||
+      String(m.display_name || '').toLowerCase().includes(q) ||
+      String(m.model_name || '').toLowerCase().includes(q)
+    )
+    console.log('[模型筛选] 搜索过滤后:', result.length)
+  }
+
+  if (modelVendorFilter.value) {
+    result = result.filter(m => m.vendor === modelVendorFilter.value)
+    console.log('[模型筛选] 厂商过滤后:', result.length)
+  }
+
+  if (modelMediaTypeFilter.value) {
+    result = result.filter(m => m.media_type === modelMediaTypeFilter.value)
+    console.log('[模型筛选] 类型过滤后:', result.length)
+  }
+
+  if (modelStatusFilter.value) {
+    result = result.filter(m => m.status === modelStatusFilter.value)
+    console.log('[模型筛选] 状态过滤后:', result.length)
+  }
+
+  if (modelEnabledFilter.value !== '' && modelEnabledFilter.value !== null && modelEnabledFilter.value !== undefined) {
+    const val = modelEnabledFilter.value === 'true' || modelEnabledFilter.value === true
+    result = result.filter(m => m.is_enabled === val)
+    console.log('[模型筛选] 启停过滤后:', result.length)
+  }
+
+  console.log('[模型筛选] 最终结果:', result.length)
+  return result
+})
+
+const modelTotalPages = computed(() => Math.ceil(filteredModels.value.length / modelPageSize) || 1)
+const pagedModels = computed(() => {
+  const start = (modelPage.value - 1) * modelPageSize
+  return filteredModels.value.slice(start, start + modelPageSize)
+})
+
+async function fetchModels() {
+  try {
+    const res = await getAdminModelsApi({
+      limit: 1000,
+      include_deleted: showDeletedModels.value // 根据回收站开关决定是否显示软删模型
+    })
+    if (isUnmounted.value) return
+    // 后端返回 { code, message, data: { items, total } } 包裹结构
+    const body = res.data
+    const data = (body && body.code !== undefined && body.data !== undefined) ? body.data : body
+    const items = data.items || []
+    // 确保每条数据都有media_type字段，用于筛选
+    modelList.value = items.map(m => ({
+      ...m,
+      media_type: m.media_type || (m.type || null)
+    }))
+    // 调试日志：输出各类型的模型数量
+    const typeCount = {}
+    modelList.value.forEach(m => { typeCount[m.media_type] = (typeCount[m.media_type] || 0) + 1 })
+    console.log('[模型列表] 加载完成，类型分布:', typeCount, '总数:', modelList.value.length, '回收站:', showDeletedModels.value)
+  } catch (e) {
+    console.error('获取模型列表失败:', e)
+    alert('获取模型列表失败：' + e.message)
+  }
+}
+
+// 回收站视图切换
+function toggleDeletedView() {
+  modelPage.value = 1 // 重置页码
+  fetchModels()
+}
+
+// ----- 新增/编辑 -----
+const showModelModal = ref(false)
+const editingModel = ref(null)
+const defaultModelForm = () => ({
+  model_id: '', model_name: '', model_version: '', display_name: '',
+  vendor: 'vendor_a', vendor_display_name: '', media_type: 'image',
+  supported_features: [],
+  supported_resolutions_text: '',
+  supported_aspect_ratios_text: '',
+  sound_mode: null, ui_features: [],
+  max_width: null, max_height: null, min_width: null, min_height: null,
+  max_duration: null, max_fps: null,
+  price_per_request: null, price_per_second: null, price_multiplier: 1.00,
+  currency: 'CNY', price_tiers_text: '',
+  status: 'active', is_enabled: true,
+  availability_region: '', description: '', tagsText: ''
+})
+const modelForm = ref(defaultModelForm())
+
+function openModelModal(model) {
+  editingModel.value = model || null
+  if (model) {
+    modelForm.value = {
+      ...defaultModelForm(),
+      ...model,
+      supported_features: [...(model.supported_features || [])],
+      sound_mode: model.sound_mode || null,
+      ui_features: [...(model.ui_features || [])],
+      supported_resolutions_text: (model.supported_resolutions || []).join(','),
+      supported_aspect_ratios_text: (model.supported_aspect_ratios || []).join(','),
+      tagsText: (model.tags || []).join(','),
+      price_tiers_text: model.price_tiers ? JSON.stringify(model.price_tiers, null, 2) : ''
+    }
+  } else {
+    modelForm.value = defaultModelForm()
+  }
+  showModelModal.value = true
+  nextTick(() => { if (window.lucide) lucide.createIcons() })
+}
+
+function closeModelModal() {
+  showModelModal.value = false
+  editingModel.value = null
+}
+
+function buildModelPayload() {
+  const f = modelForm.value
+  const payload = {
+    model_id: f.model_id,
+    model_name: f.model_name,
+    model_version: f.model_version,
+    display_name: f.display_name,
+    vendor: f.vendor,
+    media_type: f.media_type,
+    status: f.status,
+    is_enabled: !!f.is_enabled
+  }
+  if (f.vendor_display_name) payload.vendor_display_name = f.vendor_display_name
+  if (f.availability_region) payload.availability_region = f.availability_region
+  if (f.description) payload.description = f.description
+  if (f.currency) payload.currency = f.currency
+  if (f.price_multiplier != null) payload.price_multiplier = Number(f.price_multiplier)
+
+  // 数组字段
+  // supported_features 允许为空数组（清空所有支持功能），始终发送
+  payload.supported_features = [...(f.supported_features || [])]
+  // sound_mode 允许为 null（非视频模型），始终发送以便清空
+  payload.sound_mode = f.sound_mode
+  // ui_features 允许为空数组（清空所有特色功能），始终发送
+  payload.ui_features = [...(f.ui_features || [])]
+  if (f.supported_resolutions_text && f.supported_resolutions_text.trim()) {
+    payload.supported_resolutions = f.supported_resolutions_text.split(',').map(s => s.trim()).filter(Boolean)
+  }
+  if (f.supported_aspect_ratios_text && f.supported_aspect_ratios_text.trim()) {
+    payload.supported_aspect_ratios = f.supported_aspect_ratios_text.split(',').map(s => s.trim()).filter(Boolean)
+  }
+  if (f.tagsText && f.tagsText.trim()) {
+    payload.tags = f.tagsText.split(',').map(s => s.trim()).filter(Boolean)
+  }
+
+  // 数值字段 - 只在有有效值时才添加
+  ;['max_width', 'max_height', 'min_width', 'min_height', 'max_duration', 'max_fps'].forEach(k => {
+    const val = Number(f[k])
+    if (f[k] !== null && f[k] !== '' && f[k] !== undefined && !isNaN(val)) {
+      payload[k] = val
+    }
+  })
+
+  // 定价
+  const pricePerRequest = Number(f.price_per_request)
+  if (f.price_per_request !== null && f.price_per_request !== '' && f.price_per_request !== undefined && !isNaN(pricePerRequest)) {
+    payload.price_per_request = pricePerRequest
+  }
+  const pricePerSecond = Number(f.price_per_second)
+  if (f.price_per_second !== null && f.price_per_second !== '' && f.price_per_second !== undefined && !isNaN(pricePerSecond)) {
+    payload.price_per_second = pricePerSecond
+  }
+
+  // price_tiers
+  if (f.price_tiers_text && f.price_tiers_text.trim()) {
+    try {
+      const parsed = JSON.parse(f.price_tiers_text)
+      if (typeof parsed === 'object' && parsed !== null && Object.keys(parsed).length > 0) {
+        payload.price_tiers = parsed
+      }
+    } catch (e) {
+      throw new Error('分级定价 JSON 格式错误：' + e.message)
+    }
+  }
+
+  return payload
+}
+
+async function submitModel() {
+  // 必填校验
+  const f = modelForm.value
+  if (!f.model_id || !f.model_name || !f.model_version || !f.display_name || !f.vendor || !f.media_type) {
+    alert('请填写所有必填字段（model_id / model_name / model_version / display_name / vendor / media_type）')
+    return
+  }
+
+  let payload
+  try {
+    payload = buildModelPayload()
+  } catch (e) {
+    alert(e.message)
+    return
+  }
+
+  try {
+    if (editingModel.value) {
+      // PATCH：构建增量更新数据，只包含有意义的字段
+      const { model_id, ...patchData } = payload
+      // 移除值为null、undefined、空字符串的可选字段，避免422验证错误
+      // 注意：sound_mode 允许为 null（非视频模型），需要保留以便清空
+      const cleanPatchData = {}
+      for (const [key, value] of Object.entries(patchData)) {
+        if (key === 'sound_mode') {
+          cleanPatchData[key] = value
+        } else if (value !== null && value !== undefined && value !== '') {
+          cleanPatchData[key] = value
+        }
+      }
+      await updateAdminModelApi(editingModel.value.model_id, cleanPatchData)
+      addLog('update', `修改模型「${f.display_name}」`, `模型#${editingModel.value.model_id}`)
+    } else {
+      // 新增模型：检查是否已存在同名模型
+      const existingSameId = modelList.value.find(m => m.model_id === f.model_id)
+      if (existingSameId) {
+        const typeLabel = { image: '图片', video: '视频', audio: '音频' }
+        if (existingSameId.media_type === f.media_type) {
+          // 同名同类型：提示是否覆盖更新
+          const confirmMsg = `模型ID「${f.model_id}」已存在（类型：${f.media_type}）。\n\n是否覆盖更新该模型的配置？`
+          if (!confirm(confirmMsg)) return
+        } else {
+          // 同名不同类型：使用带后缀的ID存储，保持原始ID用于API调用
+          const currentTypeLabel = typeLabel[f.media_type] || f.media_type
+          const existingTypeLabel = typeLabel[existingSameId.media_type] || existingSameId.media_type
+          const suffixMap = { image: '__img', video: '__vid', audio: '__aud' }
+          const suffix = suffixMap[f.media_type] || `__${f.media_type}`
+          const newModelId = f.model_id + suffix
+          const suggestedDisplayName = `${f.display_name.replace(/\s*\([^)]*\)$/, '')} (${currentTypeLabel})`
+
+          const confirmMsg =
+            `═══ 模型多类型支持 ═══\n\n` +
+            `模型ID「${f.model_id}」已被「${existingTypeLabel}」类型占用。\n\n` +
+            `【系统处理】\n` +
+            `• 存储ID自动改为：「${newModelId}」（满足数据库唯一约束）\n` +
+            `• API调用ID保持为：「${f.model_id}」（确保后端能识别）\n` +
+            `• 展示名改为：「${suggestedDisplayName}」\n\n` +
+            `【效果】\n` +
+            `• 前端列表会显示两条独立记录（图片/视频）\n` +
+            `• 生成时自动使用正确的API ID\n` +
+            `• 定价/特性可独立配置\n\n` +
+            `是否确认创建？`
+
+          if (!confirm(confirmMsg)) return
+
+          // 应用新的存储ID和展示名
+          payload.model_id = newModelId
+          f.model_id = newModelId
+          payload.display_name = suggestedDisplayName
+          f.display_name = suggestedDisplayName
+          // 在描述中标记原始API ID，用于GenerateView映射
+          payload.description = `[api_model_id:${f.model_id.replace(suffix, '')}] ${f.description || ''}`
+        }
+      }
+      await createAdminModelApi(payload)
+      addLog('create', `新增模型「${payload.display_name}」`, `模型#${payload.model_id}`)
+    }
+    closeModelModal()
+    await fetchModels()
+  } catch (e) {
+    console.error('提交模型失败:', e)
+    alert('操作失败：' + (e.response?.data?.detail?.message || e.message))
+  }
+}
+
+// ----- 启停 -----
+async function toggleModelEnabled(m) {
+  try {
+    if (m.is_enabled) {
+      await disableAdminModelApi(m.model_id)
+      m.is_enabled = false
+      addLog('status', `停用模型「${m.display_name}」`, `模型#${m.model_id}`)
+    } else {
+      await enableAdminModelApi(m.model_id)
+      m.is_enabled = true
+      addLog('status', `启用模型「${m.display_name}」`, `模型#${m.model_id}`)
+    }
+  } catch (e) {
+    alert('操作失败：' + e.message)
+  }
+}
+
+// ----- 删除 -----
+async function deleteModel(m) {
+  // 软删：设置 deleted_at、is_enabled=false、status=deprecated
+  const confirmMsg = `确定要软删模型「${m.display_name}」吗？\n\n` +
+    `• 模型ID: ${m.model_id}\n` +
+    `• 类型: ${getMediaTypeLabel(m.media_type)}\n` +
+    `• 软删后模型将进入回收站，可随时恢复\n` +
+    `• 如需永久删除，请在回收站中执行"硬删"`
+  if (!confirm(confirmMsg)) return
+
+  try {
+    const res = await deleteAdminModelApi(m.model_id, { force: false })
+    if (isUnmounted.value) return
+    // 更新本地列表中的模型状态（如果在回收站视图则保留，否则移除）
+    if (!showDeletedModels.value) {
+      const idx = modelList.value.findIndex(item => item.model_id === m.model_id)
+      if (idx !== -1) modelList.value.splice(idx, 1)
+    } else {
+      // 在回收站视图，更新模型状态（替换整项以触发响应式更新）
+      const idx = modelList.value.findIndex(item => item.model_id === m.model_id)
+      if (idx !== -1) {
+        modelList.value[idx] = {
+          ...modelList.value[idx],
+          deleted_at: new Date().toISOString().replace('T', ' ').slice(0, 19),
+          is_enabled: false,
+          status: 'deprecated'
+        }
+      }
+    }
+    addLog('delete', `软删模型「${m.display_name}」`, `模型#${m.model_id}`)
+    alert('模型已软删，进入回收站')
+  } catch (e) {
+    console.error('软删模型失败:', e)
+    alert('软删失败：' + (e.response?.data?.detail?.message || e.message))
+  }
+}
+
+// 硬删：物理删除（仅限回收站中的模型）
+async function hardDeleteModel(m) {
+  if (!m.deleted_at) {
+    alert('只能硬删已软删的模型，请先软删再执行硬删')
+    return
+  }
+  const confirmMsg = `确定要硬删模型「${m.display_name}」吗？\n\n` +
+    `• 模型ID: ${m.model_id}\n` +
+    `• 硬删后数据将永久删除，不可恢复！\n` +
+    `• 如果有任务正在使用此模型，硬删会失败`
+  if (!confirm(confirmMsg)) return
+
+  try {
+    const res = await deleteAdminModelApi(m.model_id, { force: true })
+    // 从本地列表中移除
+    const idx = modelList.value.findIndex(item => item.model_id === m.model_id)
+    if (idx !== -1) modelList.value.splice(idx, 1)
+    addLog('delete', `硬删模型「${m.display_name}」`, `模型#${m.model_id}`)
+    alert('模型已永久删除')
+  } catch (e) {
+    console.error('硬删模型失败:', e)
+    alert('硬删失败：' + (e.response?.data?.detail?.message || e.message))
+  }
+}
+
+// 恢复软删的模型
+async function restoreModel(m) {
+  if (!m.deleted_at) {
+    alert('该模型未处于软删状态')
+    return
+  }
+  const confirmMsg = `确定要恢复模型「${m.display_name}」吗？\n\n` +
+    `• 模型ID: ${m.model_id}\n` +
+    `• 恢复后模型将重新启用并变为 active 状态`
+  if (!confirm(confirmMsg)) return
+
+  try {
+    const res = await restoreAdminModelApi(m.model_id)
+    if (isUnmounted.value) return
+    // 更新本地列表中的模型状态（替换整项以触发响应式更新）
+    const idx = modelList.value.findIndex(item => item.model_id === m.model_id)
+    if (idx !== -1) {
+      modelList.value[idx] = {
+        ...modelList.value[idx],
+        deleted_at: null,
+        is_enabled: true,
+        status: 'active',
+        updated_at: new Date().toISOString().replace('T', ' ').slice(0, 19)
+      }
+    }
+    addLog('status', `恢复模型「${m.display_name}」`, `模型#${m.model_id}`)
+    alert('模型已恢复')
+    // 如果不在回收站视图，可能需要刷新列表
+    if (!showDeletedModels.value) {
+      fetchModels()
+    }
+  } catch (e) {
+    console.error('恢复模型失败:', e)
+    alert('恢复失败：' + (e.response?.data?.detail?.message || e.message))
+  }
+}
+
+// ----- 克隆模型 -----
+function openCloneModal(m) {
+  cloneSourceModel.value = m
+  cloneForm.value = {
+    new_model_id: `${m.model_id}_clone`, // 默认加上 _clone 后缀
+    display_name: `${m.display_name} (克隆)`,
+    model_name: m.model_name,
+    model_version: m.model_version,
+    price_per_request: m.price_per_request,
+    price_per_second: m.price_per_second,
+    price_multiplier: m.price_multiplier,
+    description: m.description
+  }
+  showCloneModal.value = true
+  nextTick(() => { if (window.lucide) lucide.createIcons() })
+}
+
+function closeCloneModal() {
+  showCloneModal.value = false
+  cloneSourceModel.value = null
+}
+
+async function submitClone() {
+  if (!cloneForm.value.new_model_id || !cloneForm.value.new_model_id.trim()) {
+    alert('请输入新模型ID')
+    return
+  }
+  if (cloneForm.value.new_model_id === cloneSourceModel.value.model_id) {
+    alert('新模型ID不能与源模型ID相同')
+    return
+  }
+
+  try {
+    const payload = {
+      new_model_id: cloneForm.value.new_model_id.trim()
+    }
+    // 只添加非空字段
+    if (cloneForm.value.display_name) payload.display_name = cloneForm.value.display_name
+    if (cloneForm.value.model_name) payload.model_name = cloneForm.value.model_name
+    if (cloneForm.value.model_version) payload.model_version = cloneForm.value.model_version
+    if (cloneForm.value.price_per_request != null) payload.price_per_request = cloneForm.value.price_per_request
+    if (cloneForm.value.price_per_second != null) payload.price_per_second = cloneForm.value.price_per_second
+    if (cloneForm.value.price_multiplier != null) payload.price_multiplier = cloneForm.value.price_multiplier
+    if (cloneForm.value.description) payload.description = cloneForm.value.description
+
+    const res = await cloneAdminModelApi(cloneSourceModel.value.model_id, payload)
+    if (isUnmounted.value) return
+    const body = res.data
+    const newModel = (body && body.code !== undefined && body.data !== undefined) ? body.data : body
+
+    // 将新模型添加到列表（如果在回收站视图）
+    if (showDeletedModels.value || !newModel.deleted_at) {
+      modelList.value.unshift(newModel)
+    }
+
+    addLog('create', `克隆模型「${cloneSourceModel.value.display_name}」→「${newModel.display_name}」`, `模型#${newModel.model_id}`)
+    alert(`克隆成功！新模型ID: ${newModel.model_id}\n\n新模型默认已停用，请在模型列表中启用`)
+    closeCloneModal()
+  } catch (e) {
+    console.error('克隆模型失败:', e)
+    alert('克隆失败：' + (e.response?.data?.detail?.message || e.message))
+  }
+}
+
+// ----- 详情 -----
+const showModelDetailModal = ref(false)
+const selectedModelDetail = ref(null)
+
+async function viewModelDetail(m) {
+  try {
+    const res = await getAdminModelDetailApi(m.model_id)
+    if (isUnmounted.value) return
+    const body = res.data
+    selectedModelDetail.value = (body && body.code !== undefined && body.data !== undefined) ? body.data : body
+    showModelDetailModal.value = true
+    nextTick(() => { if (window.lucide) lucide.createIcons() })
+  } catch (e) {
+    alert('获取详情失败：' + e.message)
+  }
+}
+
+// ----- 用量 -----
+const showModelUsageModal = ref(false)
+const selectedModelUsage = ref(null)
+const usageDays = ref(30)
+const currentUsageModelId = ref(null)
+
+async function viewModelUsage(m) {
+  currentUsageModelId.value = m.model_id
+  try {
+    const res = await getAdminModelUsageApi(m.model_id, { days: usageDays.value })
+    if (isUnmounted.value) return
+    const body = res.data
+    selectedModelUsage.value = (body && body.code !== undefined && body.data !== undefined) ? body.data : body
+    showModelUsageModal.value = true
+    nextTick(() => { if (window.lucide) lucide.createIcons() })
+  } catch (e) {
+    alert('获取用量失败：' + e.message)
+  }
+}
+
+async function reloadModelUsage() {
+  if (!currentUsageModelId.value) return
+  try {
+    const res = await getAdminModelUsageApi(currentUsageModelId.value, { days: usageDays.value })
+    if (isUnmounted.value) return
+    const body = res.data
+    selectedModelUsage.value = (body && body.code !== undefined && body.data !== undefined) ? body.data : body
+  } catch (e) {
+    alert('刷新用量失败：' + e.message)
+  }
+}
+
+// ----- 变更历史 -----
+const showModelChangelogModal = ref(false)
+const selectedModelChangelog = ref(null)
+
+async function viewModelChangelog(m) {
+  try {
+    const res = await getAdminModelChangelogApi(m.model_id, { limit: 100 })
+    if (isUnmounted.value) return
+    const body = res.data
+    selectedModelChangelog.value = (body && body.code !== undefined && body.data !== undefined) ? body.data : body
+    showModelChangelogModal.value = true
+    nextTick(() => { if (window.lucide) lucide.createIcons() })
+  } catch (e) {
+    alert('获取变更历史失败：' + e.message)
+  }
+}
+
+// ----- 同步 JSON -----
+// ----- 搜索/筛选调试 -----
+function onModelSearchChange() {
+  console.log('[模型搜索] 输入:', modelSearch.value, '| 过滤结果:', filteredModels.value.length)
+}
+
+function onModelFilterChange(type, event) {
+  const value = event.target.value
+  console.log(`[模型筛选] ${type} =`, value,
+    '| 厂商:', modelVendorFilter.value,
+    '| 类型:', modelMediaTypeFilter.value,
+    '| 状态:', modelStatusFilter.value,
+    '| 启停:', modelEnabledFilter.value,
+    '| 结果:', filteredModels.value.length)
+}
+
+async function handleSyncFromJson() {
+  if (!confirm('确认从 JSON 重新灌入模型库？\n\nforce=false：保留人工配置，仅插入新模型\nforce=true：强制用 JSON 覆盖所有配置\n\n点击"确定"使用 force=false（推荐），点击"取消"放弃操作。如需 force=true，请改用浏览器控制台调用。')) return
+  try {
+    const res = await syncAdminModelsFromJsonApi({ force: false })
+    const s = res.data.summary
+    alert(`同步完成！\n\n腾讯云：插入 ${s.tencent.inserted}，更新 ${s.tencent.updated}，跳过 ${s.tencent.skipped}，错误 ${s.tencent.errors}\nToken Switch：插入 ${s.token_switch.inserted}，更新 ${s.token_switch.updated}，跳过 ${s.token_switch.skipped}，错误 ${s.token_switch.errors}`)
+    addLog('update', '从 JSON 同步模型库', '模型库')
+    await fetchModels()
+  } catch (e) {
+    alert('同步失败：' + e.message)
+  }
+}
+
 onMounted(() => {
   nextTick(() => { if (window.lucide) lucide.createIcons() })
   fetchAnnouncements()
+  fetchModels()
+})
+
+onUnmounted(() => {
+  isUnmounted.value = true
 })
 </script>
 
@@ -1011,10 +2169,46 @@ onMounted(() => {
 .search-action-bar { display: flex; flex-direction: column; margin-bottom: 20px; padding: 24px; background: white; border: 1.5px solid var(--border-light); border-radius: var(--radius-xl); }
 .table-header-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 12px; }
 .table-title { font-size: 15px; font-weight: 700; color: var(--text-primary); }
-.header-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.search-wrap-member { display: flex; align-items: center; gap: 8px; width: 240px; padding: 8px 14px; background: #f8fafc; border: 1.5px solid var(--border-light); border-radius: 10px; }
-.search-input-member { flex: 1; border: none; outline: none; font-size: 13px; color: var(--text-primary); background: transparent; }
-.filter-select-member { padding: 8px 14px; border: 1.5px solid var(--border-light); border-radius: 10px; font-size: 13px; color: var(--text-primary); background: white; cursor: pointer; }
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  position: relative;
+  z-index: 10;
+}
+.search-wrap-member {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 240px;
+  padding: 8px 14px;
+  background: #f8fafc;
+  border: 1.5px solid var(--border-light);
+  border-radius: 10px;
+  position: relative;
+  z-index: 11;
+}
+.search-input-member {
+  flex: 1;
+  border: none;
+  outline: none;
+  font-size: 13px;
+  color: var(--text-primary);
+  background: transparent;
+  cursor: text;
+}
+.filter-select-member {
+  padding: 8px 14px;
+  border: 1.5px solid var(--border-light);
+  border-radius: 10px;
+  font-size: 13px;
+  color: var(--text-primary);
+  background: white;
+  cursor: pointer;
+  position: relative;
+  z-index: 11;
+}
 .btn-add-new {
   display: flex; align-items: center; gap: 6px; padding: 8px 18px;
   background: linear-gradient(135deg,#6366f1,#8b5cf6); color: white; border: none; border-radius: 10px;
@@ -1214,4 +2408,183 @@ onMounted(() => {
 .ann-cat-update { background: #dbeafe; color: #1d4ed8; }
 .ann-cat-event { background: #dcfce7; color: #15803d; }
 .ann-cat-tutorial { background: #fef3c7; color: #b45309; }
+
+/* ===== 模型管理样式 ===== */
+.model-stats-bar {
+  display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; margin-bottom: 20px;
+}
+.model-stat {
+  background: white; border: 1.5px solid var(--border-light); border-radius: var(--radius-xl);
+  padding: 16px 18px; display: flex; flex-direction: column; gap: 4px;
+}
+.ms-label { font-size: 12px; color: var(--text-secondary); font-weight: 500; }
+.ms-val { font-size: 22px; font-weight: 800; color: var(--text-primary); }
+.ms-green { color: #10b981; }
+.ms-red { color: #ef4444; }
+.ms-blue { color: #3b82f6; }
+.ms-purple { color: #8b5cf6; }
+.ms-amber { color: #f59e0b; }
+
+.model-table th, .model-table td { font-size: 12.5px; }
+.model-name-cell { display: flex; flex-direction: column; gap: 3px; }
+.model-tags-mini { display: flex; gap: 4px; flex-wrap: wrap; }
+.tag-mini {
+  display: inline-block; padding: 1px 6px; border-radius: 4px;
+  font-size: 10px; font-weight: 600; background: #eef2ff; color: #6366f1;
+}
+.vendor-badge {
+  display: inline-block; padding: 3px 10px; border-radius: 6px;
+  font-size: 11px; font-weight: 600; white-space: nowrap;
+}
+.vendor-vendor_a { background: #dbeafe; color: #1e40af; }
+.vendor-vendor_b { background: #ede9fe; color: #6d28d9; }
+.media-type-badge {
+  display: inline-block; padding: 3px 10px; border-radius: 6px;
+  font-size: 11px; font-weight: 600; white-space: nowrap;
+}
+.media-image { background: #fef3c7; color: #b45309; }
+.media-video { background: #fee2e2; color: #b91c1c; }
+.media-audio { background: #dcfce7; color: #15803d; }
+
+.sound-mode-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 500;
+}
+.sound-mode-badge.sm-free { background: #dcfce7; color: #15803d; }
+.sound-mode-badge.sm-forced-sound { background: #fef3c7; color: #92400e; }
+.sound-mode-badge.sm-disabled-silent { background: #f3f4f6; color: #6b7280; }
+.sound-mode-badge.sm-hidden { background: #f1f5f9; color: #94a3b8; }
+
+.price-cell { min-width: 110px; }
+.price-line { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.price-val { font-weight: 600; color: #111827; font-variant-numeric: tabular-nums; }
+.price-mult {
+  display: inline-block; padding: 1px 6px; border-radius: 4px;
+  font-size: 10px; font-weight: 600; background: #fef3c7; color: #b45309;
+}
+.price-tiers-mini {
+  font-size: 10.5px; color: #6b7280; margin-top: 2px;
+}
+
+.empty-row {
+  text-align: center; padding: 32px 12px !important; color: #9ca3af; font-size: 13px;
+}
+
+/* 迷你开关 */
+.switch.switch-mini { width: 36px; height: 20px; }
+.switch.switch-mini .slider::before { width: 14px; height: 14px; left: 3px; bottom: 3px; }
+.switch.switch-mini input:checked + .slider::before { transform: translateX(16px); }
+
+/* ===== 模型弹窗扩展样式 ===== */
+.modal-xl { max-width: 880px; }
+.form-section-title {
+  font-size: 14px; font-weight: 700; color: #111827;
+  margin: 20px 0 14px; padding-bottom: 8px; border-bottom: 1px solid #e5e7eb;
+  display: flex; align-items: center; gap: 6px;
+}
+.form-section-title:first-child { margin-top: 0; }
+.form-row-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+.form-hint-text { display: block; font-size: 11.5px; color: #9ca3af; margin-top: 4px; }
+
+.checkbox-group {
+  display: flex; flex-wrap: wrap; gap: 10px 16px;
+  padding: 10px 14px; background: #f8fafc; border: 1.5px solid #e5e7eb; border-radius: 10px;
+}
+.checkbox-item {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 13px; color: #374151; cursor: pointer; user-select: none;
+}
+.checkbox-item input { cursor: pointer; }
+
+.switch-label-text {
+  margin-left: 12px; font-size: 13px; color: #374151; font-weight: 500;
+}
+
+/* ===== 用量统计 ===== */
+.usage-controls {
+  display: flex; align-items: center; gap: 12px; margin-bottom: 18px;
+}
+.usage-days-select { width: auto; min-width: 140px; }
+.usage-stats-grid {
+  display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 20px;
+}
+.usage-stat-card {
+  background: #f8fafc; border: 1.5px solid #e5e7eb; border-radius: 12px;
+  padding: 14px 16px; display: flex; flex-direction: column; gap: 4px;
+}
+.usage-stat-card.us-success { background: #ecfdf5; border-color: #a7f3d0; }
+.usage-stat-card.us-fail { background: #fef2f2; border-color: #fecaca; }
+.usage-stat-card.us-cost { background: #eff6ff; border-color: #bfdbfe; }
+.usage-stat-card .us-label { font-size: 11.5px; color: #6b7280; font-weight: 500; }
+.usage-stat-card .us-val { font-size: 20px; font-weight: 800; color: #111827; }
+
+/* ===== 变更历史时间线 ===== */
+.changelog-timeline { display: flex; flex-direction: column; gap: 16px; }
+.changelog-item {
+  display: flex; gap: 14px; padding: 14px 16px;
+  background: #f8fafc; border-radius: 10px; border-left: 3px solid #e5e7eb;
+}
+.changelog-dot {
+  width: 10px; height: 10px; border-radius: 50%; margin-top: 5px; flex-shrink: 0;
+  background: #9ca3af;
+}
+.cl-created { background: #10b981; }
+.cl-updated { background: #3b82f6; }
+.cl-enabled { background: #16a34a; }
+.cl-disabled { background: #ef4444; }
+.cl-deprecated { background: #f59e0b; }
+.changelog-content { flex: 1; min-width: 0; }
+.changelog-header {
+  display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;
+}
+.changelog-time { font-size: 11.5px; color: #9ca3af; }
+.changelog-desc { font-size: 13px; color: #111827; font-weight: 500; margin-bottom: 4px; }
+.changelog-operator { font-size: 11.5px; color: #6b7280; }
+.changelog-fields { margin-top: 8px; }
+.changelog-fields summary {
+  cursor: pointer; font-size: 12px; color: #6366f1; font-weight: 600;
+  padding: 4px 0;
+}
+.changelog-json {
+  background: #1f2937; color: #e5e7eb; padding: 12px; border-radius: 8px;
+  font-size: 11.5px; font-family: 'SF Mono','Cascadia Code','Consolas',monospace;
+  overflow-x: auto; margin-top: 6px; max-height: 240px;
+}
+
+/* ===== 回收站/软删模型样式 ===== */
+.deleted-row { background: #fef2f2 !important; }
+.deleted-row:hover { background: #fee2e2 !important; }
+.deleted-badge {
+  display: inline-block; margin-left: 6px;
+  padding: 2px 6px; font-size: 10px; font-weight: 700;
+  background: #ef4444; color: white; border-radius: 4px;
+}
+.checkbox-wrap {
+  display: flex; align-items: center; gap: 6px;
+  padding: 8px 12px; background: #f8fafc;
+  border: 1.5px solid var(--border-light); border-radius: 10px;
+  cursor: pointer; user-select: none;
+}
+.checkbox-wrap input[type="checkbox"] {
+  width: 16px; height: 16px; accent-color: #6366f1; cursor: pointer;
+}
+.checkbox-label { font-size: 13px; font-weight: 600; color: var(--text-secondary); }
+
+/* ===== 克隆模型弹窗样式 ===== */
+.clone-info-box {
+  background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 10px;
+  padding: 14px 16px; margin-bottom: 16px;
+}
+.clone-info-box .info-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 13px; }
+.clone-info-box .info-row:last-child { margin-bottom: 0; }
+.clone-info-box .info-label { color: #64748b; font-weight: 500; }
+.clone-info-box .info-value { color: #0c4a6e; font-weight: 600; }
+.clone-note {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 14px; background: #fefce8; border: 1px solid #fde047;
+  border-radius: 8px; margin-top: 16px; font-size: 12.5px; color: #854d0e;
+}
 </style>

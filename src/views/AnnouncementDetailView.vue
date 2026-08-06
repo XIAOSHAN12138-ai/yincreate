@@ -66,10 +66,13 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppLayout from '../components/layout/AppLayout.vue'
 import { getAnnouncementDetailApi } from '../api/announcement'
+
+// 防止组件卸载后异步回调修改 state
+const isUnmounted = ref(false)
 
 const route = useRoute()
 const router = useRouter()
@@ -102,18 +105,25 @@ async function fetchDetail() {
   try {
     const id = route.params.id
     const res = await getAnnouncementDetailApi(id)
+    if (isUnmounted.value) return
     detail.value = res.data
   } catch (e) {
     console.error('获取公告详情失败:', e)
-    detail.value = null
+    if (!isUnmounted.value) detail.value = null
   } finally {
-    loading.value = false
-    if (window.lucide) lucide.createIcons()
+    if (!isUnmounted.value) {
+      loading.value = false
+      if (window.lucide) lucide.createIcons()
+    }
   }
 }
 
 onMounted(() => {
   fetchDetail()
+})
+
+onUnmounted(() => {
+  isUnmounted.value = true
 })
 </script>
 

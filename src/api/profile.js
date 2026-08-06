@@ -1,4 +1,10 @@
 import request from '../utils/request'
+import {
+  getBillingQuotaApi,
+  estimatePriceApi as billingEstimatePrice,
+  getTaskChargeInfoApi,
+  getBillingAccountsApi
+} from './billing'
 
 // 开发模式 Mock 开关
 const MOCK_ENABLED = import.meta.env.VITE_MOCK === 'true'
@@ -8,20 +14,25 @@ function delay(ms) {
 }
 
 /**
- * 获取用户积分信息
- * @returns {Promise} { total_points, used_points, expired_points }
+ * 获取用户积分/余额信息（兼容旧接口，内部调用 billing/quota）
+ * @returns {Promise} { total_points, used_points, remaining, status }
  */
 export function getPointsApi() {
-  if (MOCK_ENABLED) {
-    return delay(300).then(() => ({
+  return getBillingQuotaApi().then(d => {
+    // d 已经是解包后的 { quota_limit, quota_used, remaining, principal_type, ... }
+    return {
       data: {
-        total_points: 5000,
-        used_points: 2300,
-        expired_points: 200
+        total_points: d.quota_limit,
+        used_points: d.quota_used,
+        remaining: d.remaining,
+        expired_points: 0,
+        account_id: d.account_id,
+        enterprise_id: d.enterprise_id,
+        principal_type: d.principal_type || 'account',
+        status: d.status
       }
-    }))
-  }
-  return request.get('/api/v1/points')
+    }
+  })
 }
 
 /**
@@ -59,34 +70,12 @@ export function saveSiteCustomizationApi(params) {
 }
 
 /**
- * 估算生成价格
+ * 估算生成价格（委托 billing API）
  * @param {Object} params - { model, output_type, feature, parameters, input_files }
  * @returns {Promise} { estimated_cost, currency, breakdown, note }
  */
 export function estimatePriceApi(params) {
-  if (MOCK_ENABLED) {
-    return delay(300).then(() => {
-      const basePrice = params.output_type === 'video' ? 0.5 : 0.1
-      const duration = params.parameters?.duration || 5
-      const cost = params.output_type === 'video' ? basePrice * duration : basePrice
-      return {
-        data: {
-          estimated_cost: cost,
-          currency: 'CNY',
-          breakdown: {
-            base_price: params.output_type === 'video' ? `${basePrice}元/秒` : `${basePrice}元/张`,
-            duration: params.output_type === 'video' ? `${duration}秒` : undefined,
-            resolution: params.parameters?.resolution || '默认',
-            with_audio: params.parameters?.with_audio ? '是' : '否',
-            has_input: (params.input_files?.length > 0) ? '是' : '否',
-            total: `${cost.toFixed(2)}元`
-          },
-          note: '实际扣费以生成结果为准'
-        }
-      }
-    })
-  }
-  return request.post('/api/v1/estimate-price', params)
+  return billingEstimatePrice(params).then(data => ({ data }))
 }
 
 /**
@@ -106,3 +95,11 @@ export function uploadFaviconApi(formData) {
     headers: { 'Content-Type': 'multipart/form-data' }
   })
 }
+
+// ==================== Billing API 转发导出 ====================
+
+/** 任务完成后获取扣费明细 GET /api/v1/tasks/{task_id}/status */
+export { getTaskChargeInfoApi }
+
+/** 查询本企业所有子账号余额（仅企业身份）GET /api/v1/billing/accounts */
+export { getBillingAccountsApi }

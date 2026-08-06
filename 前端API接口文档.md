@@ -584,6 +584,134 @@ videoElement.src = blobUrl;  // ✅ 可以正常播放
 
 ---
 
+## 6. Seedance 素材库资源引用（media_id）
+
+> Seedance 2.0 系列模型不允许直接上传含人脸的参考图/视频。需先将人像素材上传到素材库，再通过 `media_id` 引用。后端自动注册到 Neolink 资源库，用 `Asset://tkres_xxx` 协议提交给 Seedance。
+>
+> **注意**：`"seedance快捷通道"` 分组的 API Key 不需要走资源库，直接传 http URL 即可。
+
+### 6.1 适用模型
+
+| 模型 | 可引用 image | 可引用 video | 可引用 audio |
+|---|---|---|---|
+| `doubao-seedance-2-0-260128` | ✅ | ✅ | ✅ |
+| `doubao-seedance-2-0-fast-260128` | ✅ | ✅ | ✅ |
+
+### 6.2 前端关键变化
+
+1. 用户在素材库管理界面**勾选素材**（不再让用户粘贴 URL）
+2. 请求体 `input_files[]` / `references[]` 元素新增 `media_id` 字段
+3. `url` / `image_url` / `video_url` 字段可保留也可去掉，后端做兼容
+
+**字段优先级**：
+- `media_id` + `url` 都有 → 优先用 `media_id`，忽略 `url`
+- 只有 `media_id` → 走素材库资源化路径
+- 只有 `url` → 走旧路径（http URL 直接提交，适合非人脸）
+
+### 6.3 请求示例
+
+```jsonc
+// Seedance 生成 - 引用素材库素材
+{
+  "output_type": "video",
+  "model": "seedance_2.0",
+  "vendor": "vendor_b",
+  "feature": "multi_reference",
+  "prompt": "让图片1中的人做视频1的蛋糕",
+  "parameters": {
+    "duration": 11,
+    "ratio": "16:9",
+    "generate_audio": true
+  },
+  "input_files": [
+    {
+      "type": "image",
+      "media_id": "MEDIA-IMG-002",     // ← 素材库 media_id
+      "purpose": "reference",
+      "object_id": "image_1"
+    },
+    {
+      "type": "video",
+      "media_id": "MEDIA-VID-005",     // ← 视频素材同理
+      "purpose": "reference",
+      "object_id": "video_1"
+    }
+  ]
+}
+```
+
+### 6.4 references[] / input_files[] 元素结构
+
+| 字段 | 类型 | 是否必填 | 说明 |
+|---|---|---|---|
+| `media_id` | string | **推荐必填**（人脸场景） | 我方素材库中的 `media_id`，形如 `MEDIA-IMG-002` |
+| `url` | string | 兼容旧字段 | 传了会被忽略；保留不影响后端 |
+| `type` | string | ✅ 必填 | `image` / `video` / `audio` |
+| `role` | string | 推荐 | `reference_image` / `reference_video` / `reference_audio` / `first_frame` / `last_frame`，默认按 `type` 推 |
+| `purpose` | string | 否 | 固定值 `reference` |
+| `object_id` | string | 否 | 用于 prompt 引用，如 `image_1` |
+
+### 6.5 端到端流程
+
+```
+用户在前端:
+  1) 打开素材库,选一张人像图 → 点击"用于 Seedance"
+  2) 选模型 seedance_2.0,填 prompt,点"生成"
+  3) 前端调用 POST /api/v1/generate?sync=true,input_files[] 含 media_id
+       ↓
+后端 vendor_b._generate_video_seedance:
+  4) 遍历 input_files[] 中所有带 media_id 的元素
+  5) 调用 SeedanceResourceService.ensure_seedance_resource(media_id)
+     ├─ 查 media_library.seedance_resource_uuid (已注册?)
+     ├─ 没有 → 调 Neolink POST /api/model-resources 注册
+     ├─ 轮询 GET /api/model-resources/{uuid} 直到 status=1 (可用)
+     ├─ 写回 media_library.seedance_resource_uuid
+     └─ 返回 "Asset://tkres_xxx"
+  6) 改写 references 元素为 {"image_url": {"url": "Asset://tkres_xxx"}}
+       ↓
+Neolink 上游:
+  收到 Asset://tkres_xxx,识别为已授权素材,正常生成
+```
+
+### 6.6 性能 & 缓存
+
+- **首次调用**（media_id 没注册过）：需要 1-30s 等 Neolink 同步人像资源
+- **第二次以后**（同一 media_id）：直接命中 `seedance_resource_uuid` 字段，**毫秒级返回**
+- 进程重启后也命中持久化字段，不会重新注册
+
+### 6.7 边界 & 错误处理
+
+| 场景 | 行为 | 前端处理建议 |
+|---|---|---|
+| media_id 不存在 | 该 ref 保留原样，Seedance 报缺图则错误透传 | 搜索错误码 `[SeedanceResource] media_id 不存在` |
+| Neolink 同步超 30s / failed | 整次调用标记失败，前端拿到 5xx | 弹"资源同步超时，请稍后再试" |
+| 不传 media_id 只传 url | 后端原样透传 URL | 适用于非人脸素材（风景、产品图） |
+| 素材被软删 | seedance_resource_uuid 不清空，但查不到行 → 等价于没传 | 等价于不传，Seedance 报缺图 |
+
+### 6.8 UI 集成建议
+
+**素材库列表加"用于 Seedance"按钮**：
+
+```vue
+<el-button
+  v-if="row.media_type === 'image' || row.media_type === 'video'"
+  size="small"
+  @click="$emit('select-for-seedance', row)"
+>
+  用于 Seedance
+</el-button>
+```
+
+**生成页加"引用素材库"面板**：将用户选中的 `media_id[]` 渲染成 chip 列表，带删除按钮。
+
+### 6.9 相关配置
+
+| 配置项 | 默认值 | 说明 |
+|---|---|---|
+| `SEEDANCE_RESOURCE_LIBRARY_ENABLED` | `true` | 是否启用素材库资源化路径。快捷通道场景设为 `false` |
+
+---
+
 ## 特殊处理规则汇总
 
 ### 1. Base64 图片处理（Gemini 等 vendor_b 模型）
@@ -623,14 +751,24 @@ function convertBase64ToBlobUrl(dataUrl) {
 // 本地文件读取
 reader.readAsDataURL(file);  // 结果: "data:image/png;base64,..."
 
-// input_files 结构
+// input_files 结构（标准模式 - 传 URL）
 {
     type: "image" | "video" | "audio",
     url: "data:...;base64,...",      // Base64 Data URL 或 blob URL
     purpose: "reference",             // 固定值
     object_id: "image_1" | "video_1"  // 用于 prompt 引用
 }
+
+// input_files 结构（素材库模式 - 传 media_id，适用于 Seedance 人脸场景）
+{
+    type: "image" | "video" | "audio",
+    media_id: "MEDIA-IMG-002",        // ← 素材库 media_id，传了优先于 url
+    purpose: "reference",
+    object_id: "image_1"
+}
 ```
+
+> **Seedance 2.0 人脸素材**：含人脸的参考图/视频不能直接传 URL，必须先上传到素材库再通过 `media_id` 引用。详见 [§6 Seedance 素材库资源引用](#6-seedance-素材库资源引用media_id)。
 
 ### 4. 多文件自动 feature 切换
 

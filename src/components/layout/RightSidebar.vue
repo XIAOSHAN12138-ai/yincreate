@@ -31,7 +31,7 @@
 
         <!-- 统计数据网格 -->
         <div class="stats-grid">
-          <div v-for="(stat, index) in userStats" :key="index" class="stat-card">
+          <div v-for="stat in userStats" :key="stat.id" class="stat-card">
             <div class="stat-number">{{ stat.value }}</div>
             <div class="stat-label">{{ stat.label }}</div>
           </div>
@@ -83,11 +83,14 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useUserStore } from '../../stores/user'
 import { userData } from '../../data/userData'
 import { getLatestAnnouncementsApi } from '../../api/announcement'
+
+// 防止组件卸载后异步回调修改 state
+const isUnmounted = ref(false)
 
 const router = useRouter()
 const userStore = useUserStore()
@@ -119,10 +122,10 @@ const userStats = computed(() => {
   // 优先使用后端返回的统计数据，否则使用本地默认
   const stats = userStore.user?.stats || userData.user.stats
   return [
-    { value: stats.works, label: '我的作品' },
-    { value: stats.drafts, label: '草稿箱' },
-    { value: stats.favorites, label: '收藏夹' },
-    { value: stats.assets, label: '素材库' }
+    { id: 'works', value: stats.works, label: '我的作品' },
+    { id: 'drafts', value: stats.drafts, label: '草稿箱' },
+    { id: 'favorites', value: stats.favorites, label: '收藏夹' },
+    { id: 'assets', value: stats.assets, label: '素材库' }
   ]
 })
 
@@ -152,6 +155,7 @@ function goToAnnouncement(id) {
 async function fetchLatestAnnouncements() {
   try {
     const res = await getLatestAnnouncementsApi({ limit: 4 })
+    if (isUnmounted.value) return
     if (res.data && res.data.length > 0) {
       announcements.value = res.data.map(item => ({
         id: item.id,
@@ -175,12 +179,17 @@ onMounted(async () => {
   if (userStore.isLoggedIn) {
     try {
       await userStore.fetchProfile()
+      if (isUnmounted.value) return
       // 重新渲染 lucide 图标（VIP徽章等可能变化）
       if (window.lucide) lucide.createIcons()
     } catch {
       // 获取失败不影响页面展示
     }
   }
+})
+
+onUnmounted(() => {
+  isUnmounted.value = true
 })
 </script>
 

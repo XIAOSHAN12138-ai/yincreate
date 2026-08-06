@@ -8,8 +8,10 @@ export const useAppStore = defineStore('app', () => {
   const isLoading = ref(false)
 
   // 网站个性化（企业专属，持久化到 localStorage）
-  const siteFavicon = ref(getStorage('site_customization', {}).favicon_url || '')
-  const siteTitle = ref(getStorage('site_customization', {}).site_title || '')
+  // 注意：blob URL 是会话级的，刷新后失效，不存入持久化缓存
+  const cached = getStorage('site_customization', {})
+  const siteFavicon = ref((cached.favicon_url || '').startsWith('blob:') ? '' : (cached.favicon_url || ''))
+  const siteTitle = ref(cached.site_title || '')
 
   function setActiveNav(navId) {
     activeNav.value = navId
@@ -24,9 +26,11 @@ export const useAppStore = defineStore('app', () => {
   }
 
   function setSiteCustomization({ favicon_url, site_title }) {
+    // blob URL 是会话级的，不持久化到 localStorage
+    const isBlobFavicon = (favicon_url || '').startsWith('blob:')
     siteFavicon.value = favicon_url || ''
     siteTitle.value = site_title || ''
-    setStorage('site_customization', { favicon_url: siteFavicon.value, site_title: siteTitle.value })
+    setStorage('site_customization', { favicon_url: isBlobFavicon ? '' : siteFavicon.value, site_title: siteTitle.value })
     // 立即应用到浏览器
     if (siteTitle.value) {
       document.title = siteTitle.value

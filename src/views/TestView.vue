@@ -68,21 +68,35 @@
             <!-- 视频时长选择（仅视频生成时显示） -->
             <div class="param-group" v-if="selectedType === 'video'">
               <label>⏱️ 视频时长（秒）</label>
-              <div class="duration-grid">
-                <label
+              <select
+                v-model="selectedVideoDuration"
+                class="param-select duration-select"
+                :disabled="isBatchTesting"
+              >
+                <option
                   v-for="duration in videoDurations"
                   :key="duration"
-                  :class="['duration-option', { selected: selectedVideoDuration === duration }]"
+                  :value="duration"
                 >
-                  <input
-                    type="radio"
-                    :value="duration"
-                    v-model="selectedVideoDuration"
-                    name="videoDuration"
-                    :disabled="isBatchTesting"
-                  />
-                  <span>{{ duration }}秒</span>
-                </label>
+                  {{ duration }}秒
+                </option>
+              </select>
+            </div>
+
+            <!-- 视频声音开关（仅视频生成时显示） -->
+            <div class="param-group" v-if="selectedType === 'video'">
+              <label>🔊 视频声音</label>
+              <div class="sound-toggle-row">
+                <button
+                  type="button"
+                  :class="['sound-toggle-btn', { active: videoSoundEnabled }]"
+                  @click="videoSoundEnabled = !videoSoundEnabled"
+                  :disabled="isBatchTesting"
+                >
+                  <i :data-lucide="videoSoundEnabled ? 'volume-2' : 'volume-x'"></i>
+                  {{ videoSoundEnabled ? '生成声音' : '静音' }}
+                </button>
+                <span class="sound-hint">{{ videoSoundEnabled ? '将生成带音频的视频' : '仅生成画面，无音频' }}</span>
               </div>
             </div>
 
@@ -785,16 +799,26 @@
         </div>
       </div>
     </Teleport>
+
+    <!-- 全局 Toast 提示 -->
+    <Teleport to="body">
+      <Transition name="toast-fade">
+        <div v-if="toastVisible" :class="['global-toast', 'toast-' + toastType]">
+          <i
+            :data-lucide="toastType === 'success' ? 'check-circle' : toastType === 'error' ? 'alert-circle' : toastType === 'warning' ? 'alert-triangle' : 'info'"
+            style="width: 18px; height: 18px; flex-shrink: 0;"
+          ></i>
+          <span>{{ toastMessage }}</span>
+        </div>
+      </Transition>
+    </Teleport>
   </AppLayout>
 </template>
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import AppLayout from '../components/layout/AppLayout.vue'
-
-const API_CONFIG = {
-  BASE_URL: 'http://192.168.31.243:8003/api/v1'
-}
+import request, { safeMessage } from '../utils/request'
 
 const VENDOR_B_API_KEY = 'ErtveAQybj1XCVRsncebuiIYzTxUV0tganVf4bMijr5SKVzU'
 
@@ -805,8 +829,8 @@ const generateTypes = [
   { id: 'video', label: '视频生成', icon: 'video' }
 ]
 
-const resolutions = ['720p', '1080p', '2k', '4k']
-const videoDurations = [5, 6, 7, 8]
+const resolutions = ['480p', '720p', '1080p', '2k', '4k']
+const videoDurations = Array.from({ length: 30 }, (_, i) => i + 1)
 const aspectRatios = ['1:1', '16:9', '9:16', '4:3', '3:4', '5:4', '4:5', '21:9']
 const selectedRatio = ref('16:9')
 
@@ -822,8 +846,7 @@ const featureMap = {
     { id: 'outfit-change', label: 'AI换装', icon: 'shirt' }
   ],
   'video': [
-    { id: 'text_to_video', label: '文生视频', icon: 'video' },
-    { id: 'global_reference', label: '全能参考', icon: 'layers' },
+    { id: 'all-reference', label: '全能参考', icon: 'layers' },
     { id: 'video-expand', label: '视频扩写', icon: 'maximize-2' },
     { id: 'first-last-frame', label: '首尾帧', icon: 'flip-horizontal' },
     { id: 'smart-multi-frame', label: '智能多帧', icon: 'grid-3x3' },
@@ -844,6 +867,7 @@ const featureMap = {
 const selectedType = ref('image')
 const selectedResolutions = ref(['1080p'])
 const selectedVideoDuration = ref(5)
+const videoSoundEnabled = ref(false)
 const testPrompt = ref('一只可爱的猫咪在花园里玩耍，阳光明媚，高质量，细节丰富')
 const promptText = ref('一只可爱的猫咪在花园里玩耍，阳光明媚，高质量，细节丰富')
 const uploadedFiles = ref([])
@@ -1045,6 +1069,8 @@ const isBatchTesting = ref(false)
 const isPaused = ref(false)
 const shouldStop = ref(false)
 const isStopping = ref(false)
+// 单次测试结果 ID 自增计数器，保证批量任务结果 ID 唯一
+let runSingleTestIdCounter = 0
 
 const currentTestingModel = ref(null)
 const currentResolution = ref('')
@@ -1147,7 +1173,12 @@ function getTypeLabel(type) {
 function getModelFeatures(model) {
   if (!model) return []
   const type = selectedType.value
-  return featureMap[type] || []
+  const allFeatures = featureMap[type] || []
+  // 若模型声明了 ui_features，则只返回该模型支持的功能
+  if (model.ui_features && Array.isArray(model.ui_features) && model.ui_features.length > 0) {
+    return allFeatures.filter(f => model.ui_features.includes(f.id))
+  }
+  return allFeatures
 }
 
 function onModelHover(model, isHovering) {
@@ -1556,8 +1587,11 @@ function formatFileSize(bytes) {
 }
 
 function extractResultFromResponse(data) {
+  if (typeof data === 'string') {
+    throw new Error(data)
+  }
   if (!data || data.code !== 200) {
-    throw new Error(data?.message || '生成失败')
+    throw new Error(safeMessage(data?.message ?? data?.error ?? data?.detail ?? data, '生成失败'))
   }
 
   const resultData = data.data
@@ -1631,7 +1665,13 @@ async function fetchProtectedVideo(videoUrl) {
 async function selectTestDirectory() {
   try {
     if (!isFileSystemAccessSupported) {
-      showToast('您的浏览器不支持直接选择文件夹，文件将下载到默认目录', 'warning')
+      // File System Access API 仅在安全上下文（HTTPS 或 localhost）可用
+      const isSecure = window.isSecureContext
+      const reason = isSecure
+        ? '当前浏览器不支持选择文件夹功能，请使用 Chrome/Edge 浏览器'
+        : '选择文件夹功能需要 HTTPS 安全连接或 localhost 访问，当前为普通 HTTP 连接无法使用'
+      showToast(reason + '，文件将通过浏览器默认方式下载', 'warning')
+      console.warn('⚠️ showDirectoryPicker 不可用: isSecureContext =', isSecure)
       return
     }
 
@@ -1740,8 +1780,14 @@ function getFirstSelectedModel() {
 function doesModelSupportFeature(model, featureId) {
   if (!model || !featureId) return false
   const type = selectedType.value
-  const features = featureMap[type] || []
-  return features.some(f => f.id === featureId)
+  const allFeatures = featureMap[type] || []
+  // 先确认该 featureId 在当前类型的 featureMap 中存在
+  if (!allFeatures.some(f => f.id === featureId)) return false
+  // 若模型声明了 ui_features，按其过滤；否则视为全部支持
+  if (model.ui_features && Array.isArray(model.ui_features) && model.ui_features.length > 0) {
+    return model.ui_features.includes(featureId)
+  }
+  return true
 }
 
 function selectFeature(featureId) {
@@ -1812,27 +1858,188 @@ function extractServerTiming(responseData) {
   return null
 }
 
+// ========== 模型分辨率变体合并（与 GenerateView 对齐） ==========
+const RESOLUTION_SUFFIX_RE = /[-_](480p|720p|1080p|2k|4k)$/i
+const RES_KEY_TO_LABEL = { '480p': '480P', '720p': '720P', '1080p': '1080P', '2k': '2K', '4k': '4K' }
+const RES_ORDER = ['480P', '720P', '1080P', '2K', '4K']
+
+function normalizeResKey(r) {
+  return String(r || '').toLowerCase()
+}
+
+function parseResolutionVariant(modelId, modelName) {
+  const idStr = String(modelId || '')
+  let match = idStr.match(RESOLUTION_SUFFIX_RE)
+  if (match) {
+    return { baseId: idStr.slice(0, -match[0].length), resolution: match[1].toLowerCase() }
+  }
+  const nameStr = String(modelName || '')
+  match = nameStr.match(RESOLUTION_SUFFIX_RE)
+  if (match) {
+    return { baseId: idStr || nameStr.slice(0, -match[0].length), resolution: match[1].toLowerCase() }
+  }
+  return null
+}
+
+function extractSingleResolution(m) {
+  if (Array.isArray(m.supported_resolutions) && m.supported_resolutions.length === 1) {
+    return normalizeResKey(m.supported_resolutions[0])
+  }
+  if (Array.isArray(m.supported_quality) && m.supported_quality.length === 1) {
+    return normalizeResKey(m.supported_quality[0])
+  }
+  return null
+}
+
+function mergeResolutionVariants(modelList) {
+  const groupMap = new Map()
+  const noSuffix = []
+
+  for (const m of modelList) {
+    const parsed = parseResolutionVariant(m.id, m.name)
+    if (parsed && parsed.resolution) {
+      const base = parsed.baseId
+      if (!groupMap.has(base)) {
+        const merged = { ...m }
+        for (const field of ['name', 'display_name']) {
+          if (merged[field]) {
+            merged[field] = String(merged[field]).replace(RESOLUTION_SUFFIX_RE, '').trim()
+          }
+        }
+        merged._resolutionVariants = {}
+        merged._hasResolutionVariants = true
+        merged._baseModelId = base
+        merged.supported_resolutions = []
+        groupMap.set(base, { merged, variants: new Map() })
+      }
+      const group = groupMap.get(base)
+      group.variants.set(parsed.resolution, m)
+      group.merged._resolutionVariants[parsed.resolution] = m.id
+      const resList = Array.isArray(m.supported_resolutions) && m.supported_resolutions.length > 0
+        ? m.supported_resolutions
+        : (m.supported_quality || [parsed.resolution])
+      for (const r of resList) {
+        const key = normalizeResKey(r)
+        const label = RES_KEY_TO_LABEL[key] || String(r).toUpperCase()
+        if (!group.merged.supported_resolutions.includes(label)) {
+          group.merged.supported_resolutions.push(label)
+        }
+      }
+    } else {
+      noSuffix.push(m)
+    }
+  }
+
+  for (const g of groupMap.values()) {
+    if (g.merged._hasResolutionVariants && Array.isArray(g.merged.supported_resolutions)) {
+      g.merged.supported_resolutions.sort((a, b) => RES_ORDER.indexOf(a) - RES_ORDER.indexOf(b))
+    }
+  }
+
+  const idGroups = new Map()
+  for (const m of noSuffix) {
+    const key = String(m.id || m.name || '')
+    if (!key) continue
+    if (!idGroups.has(key)) idGroups.set(key, [])
+    idGroups.get(key).push(m)
+  }
+
+  for (const [id, group] of idGroups) {
+    if (group.length === 1) {
+      groupMap.set('__plain__' + id, { merged: group[0], variants: new Map() })
+      continue
+    }
+    const merged = { ...group[0] }
+    const allResKeys = new Set()
+    const variants = {}
+    for (const m of group) {
+      const resList = Array.isArray(m.supported_resolutions) && m.supported_resolutions.length > 0
+        ? m.supported_resolutions
+        : (m.supported_quality || [])
+      resList.forEach(r => allResKeys.add(normalizeResKey(r)))
+      const singleRes = extractSingleResolution(m)
+      if (singleRes) variants[singleRes] = m.id
+    }
+    for (const r of allResKeys) {
+      if (!variants[r]) variants[r] = id
+    }
+    if (Object.keys(variants).length > 0) {
+      merged._resolutionVariants = variants
+      merged._hasResolutionVariants = true
+      merged._baseModelId = id
+      merged.supported_resolutions = Array.from(allResKeys)
+        .map(r => RES_KEY_TO_LABEL[r] || r.toUpperCase())
+        .sort((a, b) => RES_ORDER.indexOf(a) - RES_ORDER.indexOf(b))
+    }
+    groupMap.set('__id__' + id, { merged, variants: new Map() })
+  }
+
+  return Array.from(groupMap.values()).map(g => g.merged)
+}
+
+function classifyModels(fetchedModels) {
+  const result = { image: [], video: [] }
+  if (!fetchedModels) return result
+
+  const rawImage = (fetchedModels.image_models || [])
+    .filter(m => {
+      if (m.is_enabled === false) return false
+      if (m.media_type === 'video') return false
+      return true
+    })
+    .map(m => ({ ...m, inputType: 'text', categoryLabel: '文本输入' }))
+
+  const rawVideo = (fetchedModels.video_models || [])
+    .filter(m => m.is_enabled !== false)
+    .map(m => ({ ...m, inputType: 'text', categoryLabel: '文本输入' }))
+
+  result.image = mergeResolutionVariants(rawImage)
+  result.video = mergeResolutionVariants(rawVideo)
+
+  console.log('📊 模型分类完成:', {
+    图片生成: result.image.length,
+    视频生成: result.video.length
+  })
+  for (const m of [...result.image, ...result.video]) {
+    if (m._hasResolutionVariants) {
+      console.log(`  📐 合并模型 "${m.name}" 分辨率变体:`, m._resolutionVariants)
+    }
+  }
+  return result
+}
+
 async function fetchModels() {
   try {
-    const response = await fetch(`${API_CONFIG.BASE_URL}/models`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${localStorage.getItem('token') || ''}`
-      }
-    })
-    const data = await response.json()
+    const { data } = await request.get('/api/v1/models')
     if (data.code === 200) {
-      allModels.value = data.data
+      const classified = classifyModels(data.data)
+      allModels.value = {
+        image_models: classified.image,
+        video_models: classified.video
+      }
       console.log('✅ 模型列表加载成功:', {
-        图片模型: data.data.image_models?.length || 0,
-        视频模型: data.data.video_models?.length || 0
+        图片模型: classified.image.length,
+        视频模型: classified.video.length
       })
     }
   } catch (error) {
     console.error('❌ 获取模型失败:', error)
     showToast('获取模型列表失败', 'error')
   }
+}
+
+// 根据模型+分辨率获取实际提交的 model ID（处理变体切换）
+function resolveSubmitModelId(model, resolutionKey) {
+  if (model._hasResolutionVariants && model._resolutionVariants) {
+    const targetRes = String(resolutionKey || '').toLowerCase()
+    const variantModelId = model._resolutionVariants[targetRes]
+    if (variantModelId) {
+      return String(variantModelId).trim()
+    }
+    const firstVariant = Object.values(model._resolutionVariants)[0]
+    return String(firstVariant || model.id || '').trim()
+  }
+  return String(model.id || '').trim()
 }
 
 function switchType(typeId) {
@@ -1948,6 +2155,10 @@ async function startBatchTest() {
       currentTestingModel.value = task.model
       currentResolution.value = task.resolution
 
+      nextTick(() => {
+        if (!isUnmounted.value && window.lucide) lucide.createIcons()
+      })
+
       await runSingleTest(task.model, task.resolution)
 
       if (!isUnmounted.value) {
@@ -1985,8 +2196,8 @@ async function runSingleTest(model, resolution) {
   }
 
   const startTime = Date.now()
-  const resultId = `${model.id}_${resolution}_${startTime}`
-
+  // 用自增计数器 + 时间戳保证 resultId 唯一，避免批量任务在同一毫秒创建导致 ID 重复覆盖
+  const resultId = `test_${runSingleTestIdCounter++}_${model.id}_${resolution}_${startTime}`
   const createTestingResult = () => ({
     id: resultId,
     modelName: model.name,
@@ -2030,6 +2241,9 @@ async function runSingleTest(model, resolution) {
           error: errorMsg
         }]
       }
+      nextTick(() => {
+        if (!isUnmounted.value && window.lucide) lucide.createIcons()
+      })
     } catch (updateError) {
       console.error('更新失败状态出错:', updateError.message)
     }
@@ -2051,97 +2265,206 @@ async function runSingleTest(model, resolution) {
   try {
     if (isUnmounted.value) throw new Error('组件已卸载')
 
-    const submitModelValue = model.vendor === 'vendor_b' ? (model.id || model.name) : model.name
+    // === 1. 解析实际提交的 model ID（处理分辨率变体切换 + __img/__vid 后缀）===
+    const rawModelId = resolveSubmitModelId(model, resolution)
+    let apiModelId = String(rawModelId || '')
+    const suffixPattern = /__(img|vid|aud)$/
+    if (suffixPattern.test(apiModelId)) {
+      apiModelId = apiModelId.replace(suffixPattern, '')
+      console.log(`[模型ID映射] ${rawModelId} → ${apiModelId}`)
+    }
 
-    const inputFiles = uploadedTestImages.value.map((img, index) => ({
-      type: 'image',
-      url: img.base64Data,
-      purpose: 'reference',
-      object_id: `image_${index + 1}`
-    }))
+    // === 2. 构造输入文件列表（优先 @引用，其次上传素材）===
+    const hasAtReferences = referencedFiles.value.length > 0
+    let allInputFiles
+    if (hasAtReferences) {
+      allInputFiles = referencedFiles.value.map(ref => ({
+        type: ref.type,
+        url: ref.url,
+        purpose: 'reference',
+        object_id: ref.object_id || String(ref.sourceId || '')
+      }))
+    } else {
+      // 兼容旧逻辑：把 uploadedTestImages 也纳入 uploadedFiles
+      allInputFiles = [...uploadedFiles.value]
+    }
 
     const isI2VModel = (model.id || model.name || '').toLowerCase().includes('i2v') ||
                        (model.name || '').toLowerCase().includes('image.to.video')
 
-    if (isI2VModel && inputFiles.length === 0) {
+    if (isI2VModel && allInputFiles.length === 0) {
       console.warn(`⚠️ ${model.name} 是 I2V 模型，需要上传参考图片才能测试`)
       const duration = ((Date.now() - startTime) / 1000).toFixed(2) + 's'
       updateResultToFailed('I2V 模型需要上传参考图片，请先上传测试图片', duration)
       return
     }
 
-    const requestBody = {
-      output_type: selectedType.value,
-      model: submitModelValue,
-      vendor: model.vendor,
-      feature: (selectedFeature.value) || (selectedType.value === 'image' ? 'text_to_image' : 'text_to_video'),
-      parameters: {
-        resolution: resolution.toUpperCase(),
-        ratio: '16:9',
-        count: 1,
-        duration: selectedType.value === 'video' ? selectedVideoDuration.value : undefined
-      },
-      prompt: testPrompt.value,
-      input_files: inputFiles
-    }
-
-    if (model.vendor === 'vendor_b' && inputFiles.length > 0) {
-      requestBody.input = {
-        media: inputFiles.map((file, index) => ({
-          type: file.type,
-          url: file.url,
-          purpose: file.purpose || 'reference',
-          object_id: file.object_id || `media_${index + 1}`
-        }))
+    // === 3. 解析 feature（与 GenerateView 对齐）===
+    let feature = selectedFeature.value || ''
+    if (!feature) {
+      if (selectedType.value === 'image') {
+        feature = allInputFiles.length > 0 ? 'image_reference' : 'text_to_image'
+      } else {
+        feature = allInputFiles.length === 0 ? 'text_to_video' : (allInputFiles.length === 1 ? 'global_reference' : 'multi_reference')
       }
-      console.log('📎 为 TokenSwitch 模型添加 input.media 字段:', requestBody.input.media.length, '个文件')
+    }
+    if (selectedType.value === 'video' && allInputFiles.length >= 2 && !selectedFeature.value) {
+      feature = 'multi_reference'
     }
 
-    const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), 300000)
+    // === 4. 处理 prompt 中的 @ 标签替换为 <<<object_id>>> ===
+    let finalPrompt = String(testPrompt.value || '').trim()
+    if (referencedFiles.value.length > 0 && finalPrompt.includes('@')) {
+      const tagToObjectId = {}
+      for (const ref of referencedFiles.value) {
+        const tag = String(ref.atTag || '')
+        const oid = String(ref.object_id || '')
+        if (tag && oid) tagToObjectId[tag] = `<<<${oid}>>>`
+      }
+      finalPrompt = finalPrompt.replace(/@\S+/g, (match) => tagToObjectId[match] || match)
+    }
+
+    // === 5. 构造 requestBody ===
+    const resolutionLabel = RES_KEY_TO_LABEL[resolution.toLowerCase()] || resolution.toUpperCase()
+    const requestBody = {
+      output_type: String(selectedType.value || 'image'),
+      model: apiModelId,
+      vendor: String(model.vendor || 'vendor_a'),
+      feature: String(feature || 'text_to_video'),
+      parameters: {},
+      prompt: finalPrompt,
+      input_files: allInputFiles.map((f) => ({
+        type: String(f.type || 'image'),
+        url: String(f.url || ''),
+        purpose: String(f.purpose || 'reference'),
+        object_id: String(f.object_id || `file_${f.type}_${Math.random().toString(36).slice(2, 6)}`)
+      }))
+    }
+
+    if (selectedType.value === 'image') {
+      requestBody.parameters = {
+        resolution: resolutionLabel,
+        ratio: selectedRatio.value,
+        count: 1
+      }
+      const modelIdLower = apiModelId.toLowerCase()
+      // GPT 图像模型专属参数
+      if (modelIdLower.includes('gpt-image') || modelIdLower.includes('chatgpt-image') || modelIdLower.includes('dall-e')) {
+        requestBody.parameters.quality = 'auto'
+        requestBody.parameters.output_format = 'png'
+        requestBody.parameters.background = 'auto'
+        if (allInputFiles.length > 0) {
+          requestBody.parameters.references = allInputFiles.map(f => ({ type: f.type || 'image', url: f.url }))
+        }
+      }
+      // 千问/万象模型参数
+      if (modelIdLower.includes('qwen') || modelIdLower.includes('wan')) {
+        requestBody.parameters.watermark = false
+        const resMatch = resolutionLabel.match(/(\d+)[pP]/i)
+        if (resMatch) {
+          const baseHeight = parseInt(resMatch[1])
+          const ratioParts = String(selectedRatio.value).split(':')
+          if (ratioParts.length === 2) {
+            const wRatio = parseInt(ratioParts[0])
+            const hRatio = parseInt(ratioParts[1])
+            const width = Math.round(baseHeight * wRatio / hRatio)
+            requestBody.parameters.size = `${width}*${baseHeight}`
+          }
+        }
+      }
+    } else if (selectedType.value === 'video') {
+      requestBody.parameters = {
+        resolution: resolutionLabel,
+        duration: selectedVideoDuration.value,
+        ratio: selectedRatio.value,
+        sound: videoSoundEnabled.value,
+        audio_generation: videoSoundEnabled.value
+      }
+
+      const modelIdLower = apiModelId.toLowerCase()
+      const isSeedance = modelIdLower.includes('seedance')
+      if (isSeedance) {
+        requestBody.parameters.generate_audio = videoSoundEnabled.value
+        requestBody.parameters.watermark = false
+      }
+
+      const featureVal = feature
+      // 对口型
+      if (featureVal === 'lip-sync') {
+        requestBody.parameters.scene_type = 'lip_sync'
+        const videoFile = allInputFiles.find(f => f.type === 'video')
+        const audioFile = allInputFiles.find(f => f.type === 'audio')
+        if (videoFile) requestBody.parameters.lip_sync_video = videoFile.url
+        if (audioFile) requestBody.parameters.lip_sync_audio = audioFile.url
+      }
+      // 动作模仿
+      else if (featureVal === 'motion-imitate') {
+        requestBody.parameters.scene_type = 'motion_control'
+        requestBody.parameters.character_orientation = 'image'
+        requestBody.parameters.keep_original_sound = 'no'
+      }
+      // 特效复刻
+      else if (featureVal === 'effect-copy') {
+        requestBody.parameters.scene_type = 'template_effect'
+      }
+      // 智能多帧
+      else if (featureVal === 'smart-multi-frame') {
+        requestBody.parameters.multi_shot = true
+        requestBody.parameters.shot_type = 'customize'
+      }
+
+      // references 带 role（非首尾帧场景）
+      if (allInputFiles.length > 0 && featureVal !== 'first-last-frame') {
+        requestBody.parameters.references = allInputFiles.map(f => {
+          const ref = { url: f.url, type: f.type || 'image' }
+          if (f.object_id) ref.object_id = f.object_id
+          if (f.purpose === 'first_frame') ref.role = 'first_frame'
+          else if (f.purpose === 'last_frame') ref.role = 'last_frame'
+          else if (f.type === 'image') ref.role = 'reference_image'
+          else if (f.type === 'video') ref.role = 'reference_video'
+          else if (f.type === 'audio') ref.role = 'reference_audio'
+          return ref
+        })
+      }
+    }
+
+    // === 6. vendor_b 的 input.media 字段（带 role）===
+    if (model.vendor === 'vendor_b' && allInputFiles.length > 0) {
+      requestBody.input = {
+        media: allInputFiles.map((file, index) => {
+          const media = {
+            type: String(file.type || 'image'),
+            url: String(file.url || ''),
+            purpose: String(file.purpose || 'reference'),
+            object_id: String(file.object_id || `media_${index + 1}`)
+          }
+          if (file.purpose === 'first_frame') media.role = 'first_frame'
+          else if (file.purpose === 'last_frame') media.role = 'last_frame'
+          else if (file.type === 'image') media.role = 'reference_image'
+          else if (file.type === 'video') media.role = 'reference_video'
+          else if (file.type === 'audio') media.role = 'reference_audio'
+          return media
+        })
+      }
+      console.log('📎 为 vendor_b 模型添加 input.media 字段:', requestBody.input.media.length, '个文件')
+    }
 
     let response
     let data
 
     try {
-      response = await fetch(`${API_CONFIG.BASE_URL}/generate?sync=true`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token') || ''}`
-        },
-        body: JSON.stringify(requestBody),
-        signal: controller.signal
-      })
-
-      clearTimeout(timeoutId)
+      response = await request.post('/api/v1/generate?sync=true', requestBody, { timeout: 1200000 })
+      data = response.data
     } catch (fetchErr) {
-      clearTimeout(timeoutId)
       if (isUnmounted.value) return
-      if (fetchErr.name === 'AbortError') {
+      if (fetchErr.code === 'ECONNABORTED' || fetchErr.code === 'ETIMEDOUT' || fetchErr.code === 'ERR_CANCELED') {
         throw new Error('请求超时（5分钟）')
       }
       throw fetchErr
     }
 
-    if (isUnmounted.value) return
-
-    if (!response.ok) {
-      let errorText = ''
-      try {
-        errorText = await response.text()
-      } catch (e) {}
-      throw new Error(`HTTP ${response.status}: ${errorText || response.statusText}`)
-    }
-
-    try {
-      data = await response.json()
-    } catch (jsonErr) {
-      throw new Error('解析响应JSON失败')
-    }
-
     if (!data || data.code !== 200 || !data.data) {
-      const errMsg = data?.message || data?.error || '生成失败'
+      const errMsg = safeMessage(data?.message ?? data?.error ?? data?.detail ?? data, '生成失败')
       throw new Error(errMsg)
     }
 
@@ -2152,7 +2475,7 @@ async function runSingleTest(model, resolution) {
     try {
       extractedData = extractResultFromResponse(data)
     } catch (extractErr) {
-      throw new Error(`提取结果失败: ${extractErr.message}`)
+      throw new Error(`提取结果失败: ${safeMessage(extractErr?.message, '未知错误')}`)
     }
 
     if (!extractedData.results || extractedData.results.length === 0) {
@@ -2222,6 +2545,9 @@ async function runSingleTest(model, resolution) {
         newResults[idx] = successResult
         testResults.value = newResults
       }
+      nextTick(() => {
+        if (!isUnmounted.value && window.lucide) lucide.createIcons()
+      })
     }
   } catch (error) {
     if (!isUnmounted.value) {
@@ -2402,8 +2728,19 @@ function clearResults() {
   }
 }
 
+// ========== Toast 提示 ==========
+const toastVisible = ref(false)
+const toastMessage = ref('')
+const toastType = ref('info')
+let toastTimer = null
+
 function showToast(msg, type = 'info') {
   console.log(`[${type.toUpperCase()}] ${msg}`)
+  toastMessage.value = msg
+  toastType.value = type
+  toastVisible.value = true
+  if (toastTimer) clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => { toastVisible.value = false }, 3000)
 }
 
 onMounted(async () => {
@@ -2665,6 +3002,55 @@ onUnmounted(() => {
 
 .duration-option input {
   display: none;
+}
+
+/* 视频声音开关 */
+.sound-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.sound-toggle-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border: 2px solid #e5e7eb;
+  border-radius: 8px;
+  background: white;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  color: #6b7280;
+}
+
+.sound-toggle-btn:hover:not(:disabled) {
+  border-color: #8b5cf6;
+  background: #faf5ff;
+}
+
+.sound-toggle-btn.active {
+  border-color: #8b5cf6;
+  background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);
+  color: white;
+  box-shadow: 0 2px 8px rgba(139, 92, 246, 0.25);
+}
+
+.sound-toggle-btn i {
+  width: 16px;
+  height: 16px;
+}
+
+.sound-toggle-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.sound-hint {
+  font-size: 11px;
+  color: #9ca3af;
 }
 
 .param-select {
@@ -4914,5 +5300,64 @@ onUnmounted(() => {
   background: rgba(34, 197, 94, 0.85);
   transform: scale(1.05);
   box-shadow: 0 4px 12px rgba(34, 197, 94, 0.4);
+}
+
+/* ========== 全局 Toast 提示 ========== */
+.global-toast {
+  position: fixed;
+  top: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 22px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 500;
+  z-index: 100000;
+  box-shadow: 0 8px 24px -4px rgba(0, 0, 0, 0.15);
+  background: white;
+  color: #111827;
+  max-width: 90vw;
+}
+
+.global-toast.toast-success {
+  background: #f0fdf4;
+  color: #15803d;
+  border: 1px solid #bbf7d0;
+}
+
+.global-toast.toast-error {
+  background: #fef2f2;
+  color: #b91c1c;
+  border: 1px solid #fecaca;
+}
+
+.global-toast.toast-warning {
+  background: #fffbeb;
+  color: #b45309;
+  border: 1px solid #fde68a;
+}
+
+.global-toast.toast-info {
+  background: #eff6ff;
+  color: #1d4ed8;
+  border: 1px solid #bfdbfe;
+}
+
+.toast-fade-enter-active,
+.toast-fade-leave-active {
+  transition: all 0.3s ease;
+}
+
+.toast-fade-enter-from {
+  opacity: 0;
+  transform: translateX(-50%) translateY(-20px);
+}
+
+.toast-fade-leave-to {
+  opacity: 0;
+  transform: translateX(-50%) translateY(-20px);
 }
 </style>

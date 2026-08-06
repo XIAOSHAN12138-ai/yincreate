@@ -18,6 +18,8 @@
         </aside>
       </div>
     </div>
+    <!-- 智能体对话悬浮入口 -->
+    <AgentChat />
   </div>
 </template>
 
@@ -27,6 +29,7 @@ import { useRoute } from 'vue-router'
 import Sidebar from './Sidebar.vue'
 import TopNav from './TopNav.vue'
 import RightSidebar from './RightSidebar.vue'
+import AgentChat from '../AgentChat.vue'
 
 const route = useRoute()
 
