@@ -4,6 +4,38 @@
 > 数据表：[`media_library`](../../database/sql/schema/08_media_library.sql)。
 > **范围**：本版本**仅素材库**。社区素材 (`community_materials`) 暂不实现，按你确认的"后续需要再补"。
 
+> ## ⚠️ 2026-07-28 更新
+>
+> 本文档中关于"列表响应"的描述（§5 / §9 / §17 / §18）已与当前实现不一致：
+>
+> - 4 个列表端点（`GET /api/v1/media`、`/by-source/{}`、`/by-type/{}`、`/recycle-bin`）返回的 `items` 类型从完整 `MediaResponse` 改为**精简 `MediaListItem`**；
+> - `total` 字段从 `len(items)` 改为 DB 真实总数；
+> - `limit` 上限由 200 改为 500；`limit=0` 静默截断到 500 并通过响应头 `X-Media-Limit-Capped: true` 提示；
+> - 新增 4 个独立流式加载端点：`/stream`、`/by-source/{}/stream`、`/by-type/{}/stream`、`/recycle-bin/stream`，固定每批 5 条，前端通过 `offset` 续拉。
+>
+> **详情端点 `GET /api/v1/media/{media_id}` 不变**，仍返回完整 `MediaResponse`。
+>
+> 完整变更说明、回滚方案、迁移指南见：
+> 📄 **[`docs/MEDIA_LIBRARY_LIST_OPTIMIZATION.md`](./MEDIA_LIBRARY_LIST_OPTIMIZATION.md)**
+
+> ## 📌 PR-4.9 更新（2026-08-12）：模型字段语义统一
+>
+> **变更**：`media_library.generation_model` 字段写入语义从**上游 ID**（如 `gp-im-2`）改为**模型展示名**（如 `gpt image 2`，即 `ai_models.display_name`）。`ai_model_id`（BIGINT）FK 仍由生成链路自动 lookup，写入稳定不变。
+>
+> **影响范围**：
+> - `generation_model`（VARCHAR 列，DB 直接读取） — **现在存展示名**，可直接展示给用户
+> - `model_id`（LEFT JOIN ai_models.business_model_id）— 仍是稳定业务 ID，用于卡片路由/回调
+> - `model_name` / `model_version`（LEFT JOIN ai_models）— 仍是 ai_models 业务短名/版本
+> - `model_display_name`（LEFT JOIN ai_models.display_name）— 与 `generation_model` 同值
+> - `vendor_display_name`（LEFT JOIN ai_models.vendor_display_name）— 不变
+>
+> **前端使用建议**：
+> - 卡片标题展示 → 直接用 `generation_model` 或 `model_display_name`
+> - 详情页"查看同类模型" / "再次生成" → 用 `model_id`（business_model_id）作为路由参数
+> - 不要再用 `generation_model` 做模型 ID 拼接（它现在是展示名，不是 ID）
+>
+> **历史数据**：已存在的旧任务（PR-4.9 之前）`generation_model` 列存的是上游 ID，不影响新任务写入。如需统一回填，可批量 UPDATE。
+
 ---
 
 ## 1. 接口列表
@@ -16,13 +48,15 @@
 | GET | `/api/v1/media/by-type/{media_type}` | 任意已登录 | **按类型分组列表**（`image` / `video` / `audio`） |
 | GET | `/api/v1/media/recycle-bin` | 任意已登录 | 回收站列表（status='deleted'） |
 | GET | `/api/v1/media/{media_id}` | 任意已登录 | 素材详情 |
-| PATCH | `/api/v1/media/{media_id}` | 创建者 / 系统管理员 | 修改 `name` / `description` / `category` / `tags` / `thumbnail_url` |
-| DELETE | `/api/v1/media/{media_id}` | 创建者 / 系统管理员 | 软删（→ 回收站） |
-| POST | `/api/v1/media/{media_id}/restore` | 创建者 / 系统管理员 | 从回收站恢复 |
-| POST | `/api/v1/media/{media_id}/purge` | **仅系统管理员** | 立即永久删除（硬删） |
+| PATCH | `/api/v1/media/{media_id}` | 创建者 / **本企业管理员** / 系统管理员 | 修改 `name` / `description` / `category` / `tags` / `thumbnail_url` |
+| DELETE | `/api/v1/media/{media_id}` | 创建者 / **本企业管理员** / 系统管理员 | 软删（→ 回收站） |
+| POST | `/api/v1/media/{media_id}/restore` | 创建者 / **本企业管理员** / 系统管理员 | 从回收站恢复 |
+| POST | `/api/v1/media/{media_id}/purge` | **本企业管理员** / 系统管理员 | 立即永久删除（硬删，员工不能硬删） |
 | POST | `/api/v1/media/{media_id}/view` | 任意已登录 | 上报 view_count + 1 |
 | POST | `/api/v1/media/{media_id}/download` | 任意已登录 | 上报 download_count + 1 |
 | POST | `/api/v1/media/{media_id}/use` | 任意已登录 | 上报 use_count + 1 |
+
+> **重要：关于 `{media_id}`**：这里必须传素材业务键，例如 `MEDIA-AE032259`，不要传响应里的数据库主键 `id`（例如 `6`）。`DELETE /api/v1/media/6` 会被后端按 `media_id='6'` 查询，通常返回 `404 NOT_FOUND`。
 
 **素材上传前奏**（不入库，只拿 URL）：
 
@@ -52,32 +86,69 @@
 
 ### 2.2 谁可以看？
 
-- **企业 / 员工**：仅看本企业素材
-- **系统管理员**：看全部（含已删除）
-- 跨企业访问 → `403 FORBIDDEN`
+| 调用方 | 看到的范围 |
+| --- | --- |
+| **系统管理员** | 全部企业的全部素材（含已删除） |
+| **企业管理员** | 本企业的全部素材 |
+| **企业员工** | **只看自己创建的素材**（`account_id == caller.account_id`） |
 
-### 2.3 谁可以改 / 删 / 恢复？
+> - 跨企业访问 → `403 FORBIDDEN`
+> - 员工看自己的素材时返回 `200`；看其他员工的素材时返回 `403 FORBIDDEN`
+> - 列表接口（`/api/v1/media`、`/by-source`、`/by-type`、`/recycle-bin`）按上表过滤
+> - 详情接口（`/api/v1/media/{media_id}`）也走同样规则，员工无权查看他人素材详情
+>
+> **未来扩展**：「企业管理员授权员工查看其他人的素材」暂不实现，后续计划通过 `account_view_scope` 字段支持（`account` 私有 / `enterprise` 企业共享）。
 
-- **系统管理员**：可对任何素材做修改 / 软删 / 恢复
-- **企业 / 员工**：仅可对自己创建的素材
-- 已删除素材不可改（先 restore）
+### 2.3 谁可以改 / 删 / 恢复 / 永久删？
+
+| 操作 | 系统管理员 | 企业管理员（本企业） | 员工创建者本人 | 员工非创建者 |
+| --- | :---: | :---: | :---: | :---: |
+| 修改（PATCH） | ✅ 全部 | ✅ 本企业 | ✅ 自己 | ❌ |
+| 软删（DELETE） | ✅ 全部 | ✅ 本企业 | ✅ 自己 | ❌ |
+| 恢复（restore） | ✅ 全部 | ✅ 本企业 | ✅ 自己 | ❌ |
+| 永久删（purge） | ✅ 全部 | ✅ 本企业 | ❌ | ❌ |
+
+> - **企业管理员**：`user_type=enterprise`，可对本企业任何素材（包括员工上传的）做修改 / 软删 / 恢复。
+> - **员工创建者本人**：`user_type=employee` 且 `creator_id` / `created_by` 匹配 token 中的 `sub`（或 `account_id`）。
+> - **员工非创建者**：完全无法操作别人的素材（即使能通过详情看到 id，写操作也会 403）。
+> - 跨企业访问 → `403 FORBIDDEN`；找不到记录 → `404 NOT_FOUND`。
+> - 已删除素材不可修改（需先 `/restore`），但**仍可继续 purge**（如果权限允许）。
+> - 永久删（`/purge`）员工账号**不允许**，防止普通员工误操作把整个素材硬删。
 
 ---
 
 ## 3. 回收站生命周期
 
 ```
-[normal] ──DELETE──> [deleted] ──(7 天后)──> 永久清理 (cleanup_expired_media)
-   ▲                    │
-   └───── /restore ─────┘
+                       ┌────────────────────────────┐
+                       │  normal (status='normal')  │
+                       └────────────────────────────┘
+                                │   ▲
+              DELETE            │   │  POST /restore
+   (创建者 / 本企业管理员 / 系统管理员)│   │  (创建者 / 本企业管理员 / 系统管理员)
+                                ▼   │
+                       ┌────────────────────────────┐
+                       │ deleted (status='deleted') │
+                       │  deleted_at + 7d           │
+                       └────────────────────────────┘
+                                │
+                  (7 天后 cleanup_expired_media 自动清理)
+                                ▼
+                          DB 记录消失
 
-任意状态 ──/purge (admin)──> 永久删除
+   任意状态 (normal / deleted) ──POST /purge──> 立即物理删除
+                (本企业管理员 / 系统管理员)
 ```
 
 - `DELETE` → schema 触发器自动写 `deleted_at` + `permanent_delete_at = +7d`
 - `/restore` → 触发器自动清空 `deleted_at` 等字段
-- `/purge` → `DELETE FROM media_library WHERE media_id = ...`（无 status 限制，**仅管理员**）
+- `/purge` → `DELETE FROM media_library WHERE media_id = ...`（任意状态都可，**仅本企业管理员 / 系统管理员**）
 - 后端可定期调用 SQL 函数：`SELECT * FROM cleanup_expired_media();`
+
+> **跨权限矩阵**：所有删除/恢复/purge 操作都需要满足：
+> - `user_type == 'admin'`，或
+> - `user_type == 'enterprise'` 且素材 `enterprise_id` 等于调用方 `enterprise_id`，或
+> - `user_type == 'employee'` 且素材 `creator_id` / `created_by` 等于调用方 `sub`（purge 除外）
 
 ---
 
@@ -180,7 +251,6 @@ curl -X POST http://localhost:8003/api/v1/media \
   "deleted_by": null,
   "delete_reason": null,
   "permanent_delete_at": null,
-  "seedance_resource_uuid": null,
   "created_at": "2026-06-04T10:00:00",
   "updated_at": "2026-06-04T10:00:00",
   "created_by_type": "enterprise",
@@ -252,44 +322,351 @@ curl -X POST http://localhost:8003/api/v1/media \
 
 ## 8. 软删 `DELETE /api/v1/media/{media_id}`
 
-### 8.1 请求体（可选）
+把素材移到回收站。schema 触发器自动写 `deleted_at` + `permanent_delete_at = NOW() + 7d`。
+
+### 8.1 路径参数
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `media_id` | string | ✅ | 素材业务键，例如 `MEDIA-AE032259` |
+
+> ⚠️ 注意：这里不是响应里的数据库主键 `id`。如果前端调用 `DELETE /api/v1/media/6`，后端会按 `media_id='6'` 查询，通常返回 `404 NOT_FOUND`。
+
+### 8.2 请求体（可选）
 
 ```json
 { "reason": "产品已下架" }
 ```
 
-### 8.2 副作用
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `reason` | string(≤255) | ❌ | 删除原因，写入 `media_library.delete_reason` |
 
-- schema 触发器自动写 `deleted_at` + `permanent_delete_at = NOW() + 7d`
-- 7 天后由 `cleanup_expired_media()` 自动清理
-- 详情接口不可见；`/recycle-bin` 可见
+如果不需要传 reason，**不要传请求体**或传 `{}` 都可以。
+
+### 8.3 权限（按优先级，任一即可）
+
+| 调用方 | 能否删除 |
+| --- | :---: |
+| 系统管理员（任意素材） | ✅ |
+| 企业管理员（**本企业**素材） | ✅ |
+| 员工创建者本人（自己 `creator_id` 匹配的素材） | ✅ |
+| 其它企业的素材 / 其它员工的素材 | ❌ `403 FORBIDDEN` |
+| 跨企业访问 | ❌ `403 FORBIDDEN` |
+| 系统管理员直接调用本接口 | ✅ |
+
+### 8.4 请求示例
+
+```bash
+# 用业务键（必须使用 media_id，不是 id）
+curl -X DELETE "http://localhost:8003/api/v1/media/MEDIA-AE032259" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{ "reason": "产品已下架" }'
+
+# 不带 reason
+curl -X DELETE "http://localhost:8003/api/v1/media/MEDIA-AE032259" \
+  -H "Authorization: Bearer <token>"
+```
+
+### 8.5 成功响应（HTTP 200）
+
+返回**软删后**的素材完整信息（`status='deleted'`）：
+
+```json
+{
+  "id": 6,
+  "media_id": "MEDIA-AE032259",
+  "enterprise_id": "demo-company",
+  "creator_type": "account",
+  "creator_id": "shuquzhi31010002",
+  "account_id": "shuquzhi31010002",
+  "user_id": null,
+  "department_id": null,
+  "media_type": "image",
+  "media_source": "uploaded",
+  "media_name": "产品图 v1",
+  "media_url": "https://...",
+  "thumbnail_url": "https://...",
+  "file_size": 524288,
+  "duration": null,
+  "width": 1920,
+  "height": 1080,
+  "format": "jpg",
+  "mime_type": "image/jpeg",
+  "generation_task_id": null,
+  "generation_prompt": null,
+  "generation_model": null,
+  "generation_params": null,
+  "category": "产品素材",
+  "tags": ["产品"],
+  "description": "2026 春季新版产品图",
+  "view_count": 12,
+  "download_count": 3,
+  "use_count": 1,
+  "status": "deleted",
+  "deleted_at": "2026-07-08T10:30:00",
+  "deleted_by_type": "account",
+  "deleted_by": "shuquzhi31010002",
+  "delete_reason": "产品已下架",
+  "permanent_delete_at": "2026-07-15T10:30:00",
+  "created_at": "2026-07-01T10:00:00",
+  "updated_at": "2026-07-08T10:30:00",
+  "created_by_type": "account",
+  "created_by": "shuquzhi31010002"
+}
+```
+
+### 8.6 副作用
+
+- schema 触发器自动写：
+  - `status` ← `'deleted'`
+  - `deleted_at` ← `NOW()`
+  - `deleted_by_type` ← `'admin'` / `'enterprise'` / `'account'`（取决于调用方）
+  - `deleted_by` ← 调用方 `sub` / `enterprise_id` / `account_id`
+  - `delete_reason` ← 请求体的 `reason`（如未传则为 `NULL`）
+  - `permanent_delete_at` ← `NOW() + 7 days`
+- 7 天后由 `cleanup_expired_media()` SQL 函数自动清理（删 DB 记录，不删云存储）
+- 软删后，`GET /api/v1/media/{media_id}` 普通列表接口不再返回该素材；仅在 `/recycle-bin` 列表中可见
+
+### 8.7 错误响应
+
+| HTTP | `code` | 触发条件 | 含义 |
+| --- | --- | --- | --- |
+| 401 | `TOKEN_MISSING` | 无 Bearer token | 缺少 Authorization |
+| 401 | `TOKEN_INVALID` | JWT 过期 / 签名错 / 格式错 | token 无效 |
+| 403 | `FORBIDDEN` | 跨企业 / 越权（既不是创建者也不是本企业管理员也不是系统管理员） | 无权操作 |
+| 404 | `NOT_FOUND` | 路径参数既不匹配任何业务键也不匹配任何主键 ID | 素材不存在 |
+| 409 | `ALREADY_DELETED` | 素材当前已是 `status='deleted'` | 已经处于软删状态，不能再软删 |
+
+### 8.8 前端调用建议
+
+```js
+// 用后端返回的 media_id 业务键（必须使用 media_id，不是 id）
+await axios.delete(`/api/v1/media/${item.media_id}`, {
+  data: { reason: '产品已下架' },
+  headers: { Authorization: `Bearer ${token}` },
+})
+
+// ❌ 错误示例：不要用 DB 主键 id
+// await axios.delete(`/api/v1/media/${item.id}`)
+```
+
+如果前端使用了列表中拿到的 `item.id`（整数）调用删除，例如 `DELETE /api/v1/media/6`，后端会按 `media_id='6'` 查询，通常返回 `404 NOT_FOUND`。正确做法是使用 `item.media_id`。
 
 ---
 
 ## 9. 回收站 `GET /api/v1/media/recycle-bin`
 
-参数同列表（`limit` / `offset`）。返回 `status='deleted'` 的素材。系统管理员看全部，企业 / 员工仅本企业。
+列出当前用户**可见**的、状态为 `deleted` 的素材（即 7 天内软删的素材）。
+
+### 9.1 查询参数
+
+| 参数 | 类型 | 默认 | 说明 |
+| --- | --- | --- | --- |
+| `limit` | int(0-200) | 50 | 单页数量；`0` 表示不限制（返回全部） |
+| `offset` | int(≥0) | 0 | 偏移 |
+
+> 其他过滤维度（`media_type` / `media_source` / `creator_type` / `keyword` 等）当前**不支持**，只能拿到所有已删素材。如需要筛选，请用通用列表 `GET /api/v1/media?media_source=uploaded&status=deleted` 的扩展（后续版本可能支持）。
+
+### 9.2 可见性
+
+| 调用方 | 看到的素材 |
+| --- | --- |
+| 系统管理员 | 所有企业的已删素材 |
+| 企业账号 | 本企业的已删素材 |
+| 员工账号 | 本企业的已删素材（不区分创建者） |
+
+### 9.3 响应
+
+```json
+{ "total": 5, "items": [ /* MediaResponse 列表，status='deleted' */ ] }
+```
+
+每条 item 与 §8.5 软删响应一致，含 `deleted_at` / `permanent_delete_at` / `delete_reason` 字段。
+
+### 9.4 示例
+
+```bash
+curl "http://localhost:8003/api/v1/media/recycle-bin?limit=20" \
+  -H "Authorization: Bearer <token>"
+```
+
+### 9.5 错误响应
+
+| HTTP | `code` | 触发条件 |
+| --- | --- | --- |
+| 401 | `TOKEN_*` | token 无效 |
+| 422 | （Pydantic） | `limit` 超范围（>200 / <0）或 `offset` 为负 |
 
 ---
 
 ## 10. 恢复 `POST /api/v1/media/{media_id}/restore`
 
-- 仅 `status='deleted'` 的素材可恢复 → 否则 `409 NOT_DELETED`
-- 触发器自动清空 `deleted_at` 等字段
+把已软删的素材恢复到 `status='normal'`。schema 触发器自动清空 `deleted_at` 等字段。
+
+### 10.1 路径参数
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `media_id` | string | ✅ | 素材业务键，例如 `MEDIA-AE032259` |
+
+### 10.2 请求体
+
+无。
+
+### 10.3 权限（与软删一致）
+
+| 调用方 | 能否恢复 |
+| --- | :---: |
+| 系统管理员（任意素材） | ✅ |
+| 企业管理员（**本企业**素材） | ✅ |
+| 员工创建者本人（自己 `creator_id` 匹配的素材） | ✅ |
+| 其它企业的素材 / 其它员工的素材 | ❌ `403 FORBIDDEN` |
+| 未软删的素材（`status='normal'`） | ❌ `409 NOT_DELETED` |
+
+### 10.4 请求示例
+
+```bash
+curl -X POST "http://localhost:8003/api/v1/media/MEDIA-AE032259/restore" \
+  -H "Authorization: Bearer <token>"
+```
+
+### 10.5 成功响应（HTTP 200）
+
+返回恢复后的素材完整信息（`status='normal'`，`deleted_at` 等清空）：
+
+```json
+{
+  "id": 6,
+  "media_id": "MEDIA-AE032259",
+  "media_name": "产品图 v1",
+  "status": "normal",
+  "deleted_at": null,
+  "deleted_by_type": null,
+  "deleted_by": null,
+  "delete_reason": null,
+  "permanent_delete_at": null,
+  "updated_at": "2026-07-08T11:00:00"
+  /* ... 其他字段不变 ... */
+}
+```
+
+### 10.6 副作用
+
+- schema 触发器自动清空：
+  - `status` ← `'normal'`
+  - `deleted_at` ← `NULL`
+  - `deleted_by_type` ← `NULL`
+  - `deleted_by` ← `NULL`
+  - `delete_reason` ← `NULL`
+  - `permanent_delete_at` ← `NULL`
+  - `updated_at` ← `NOW()`
+- 恢复后，素材重新出现在普通列表接口（`GET /api/v1/media`）中
+- **不要**影响 `view_count` / `download_count` / `use_count` 等统计字段
+
+### 10.7 错误响应
+
+| HTTP | `code` | 触发条件 |
+| --- | --- | --- |
+| 401 | `TOKEN_*` | token 无效 |
+| 403 | `FORBIDDEN` | 跨企业 / 越权 |
+| 404 | `NOT_FOUND` | 素材不存在（既不匹配业务键也不匹配 ID） |
+| 409 | `NOT_DELETED` | 素材当前不是 `deleted` 状态（说明未软删过或已 purge） |
+
+### 10.8 典型流程
+
+```
+1. DELETE /api/v1/media/MEDIA-AE032259
+   → status='deleted'
+
+2. （后悔了或误删）
+
+3. POST /api/v1/media/MEDIA-AE032259/restore
+   → status='normal'，deleted_at 清空
+```
 
 ---
 
 ## 11. 立即永久删除 `POST /api/v1/media/{media_id}/purge`
 
-**仅系统管理员**。绕过 7 天回收站期，直接 `DELETE FROM media_library`。
+绕过 7 天回收站期，立即从 `media_library` 表中**物理删除**记录。
 
-返回：
+### 11.1 路径参数
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `media_id` | string | ✅ | 素材业务键，例如 `MEDIA-AE032259` |
+
+### 11.2 请求体
+
+无。
+
+### 11.3 权限（比软删 / 恢复更严）
+
+| 调用方 | 能否永久删除 |
+| --- | :---: |
+| 系统管理员（任意素材） | ✅ |
+| 企业管理员（**本企业**素材） | ✅ |
+| 员工创建者本人 | ❌ `403 FORBIDDEN`（防止普通员工误硬删） |
+| 其它企业的素材 / 其它员工的素材 | ❌ `403 FORBIDDEN` |
+
+> 设计原则：**软删 + 7 天回收站**已经提供了撤销窗口，硬删是少数需要强制清理的场景，因此只开放给系统管理员和本企业管理员。
+
+### 11.4 请求示例
+
+```bash
+curl -X POST "http://localhost:8003/api/v1/media/MEDIA-AE032259/purge" \
+  -H "Authorization: Bearer <admin_or_enterprise_admin_token>"
+```
+
+### 11.5 成功响应（HTTP 200）
 
 ```json
 { "media_id": "MEDIA-AE032259", "purged": true }
 ```
 
-> 警告：此操作不可恢复；会**同时**删掉云存储上的引用 URL（如果未来接入云存储回调的话）。当前版本只删 DB 记录。
+### 11.6 副作用
+
+- `DELETE FROM media_library WHERE media_id = 'MEDIA-AE032259'` —— 物理删除记录
+- 数据库记录消失后：
+  - `GET /api/v1/media/{media_id}` → `404 NOT_FOUND`
+  - `/recycle-bin` 列表中也不再可见
+  - 统计上报接口（`view` / `download` / `use`）→ `404`
+- **不**会删除云存储上的文件 URL（VOD / COS / S3 等）。当前版本只删 DB 记录，URL 仍然可访问；
+  后续如果接入云存储回调或 Lifecycle 规则可以一并清理（**注意**：当前未实现，可能产生"孤儿文件"）
+
+### 11.7 错误响应
+
+| HTTP | `code` | 触发条件 |
+| --- | --- | --- |
+| 401 | `TOKEN_*` | token 无效 |
+| 403 | `FORBIDDEN` | 员工账号调用 / 跨企业访问 / 无权限 |
+| 404 | `NOT_FOUND` | 素材不存在 |
+| 500 | `DB_ERROR` | 数据库执行失败（极小概率，并发或锁） |
+
+### 11.8 不可恢复性警告
+
+> ⚠️ **purge 不可撤销**。一旦记录从 DB 删除，引用这个 `media_id` 的地方全部 404。
+>
+> 推荐流程：**先用软删（DELETE）→ 7 天后再 purge**，让用户有恢复窗口。
+> 只有在以下情况才直接 purge：
+> - 上传了违规内容需立即清理
+> - 测试 / 调试产生的脏数据
+> - 用户明确要求"立即永久删除"
+
+### 11.9 软删 vs 永久删 对照表
+
+| 维度 | 软删（DELETE） | 永久删（/purge） |
+| --- | --- | --- |
+| 操作 | `status='deleted'` + 写删除元数据 | `DELETE FROM media_library` |
+| 可恢复 | ✅ 7 天内 `/restore` | ❌ 不可恢复 |
+| 权限 | 创建者 / 本企业管理员 / 系统管理员 | 本企业管理员 / 系统管理员 |
+| 普通列表可见 | ❌（软删后不可见） | ❌（记录不存在） |
+| 回收站可见 | ✅ | ❌ |
+| 云存储文件 | 不动 | 不动（可能产生孤儿文件） |
+| 性能 | 触发器一次 UPDATE | 直接 DELETE |
+| 适用场景 | 用户取消 / 临时下架 / 误删兜底 | 违规清理 / 硬性数据清理 |
 
 ---
 
@@ -320,6 +697,8 @@ curl -X POST http://localhost:8003/api/v1/media \
 
 ## 13. 完整生命周期示例
 
+### 13.1 普通路径（员工上传 → 软删 → 恢复 → 7天后自动清理）
+
 ```
 1. 员工 A 上传图片
    POST /api/v1/media  {media_type:'image', media_name, media_url, ...}
@@ -342,18 +721,35 @@ curl -X POST http://localhost:8003/api/v1/media \
    → use_count=1
    （然后用 media_url 作为 input_files[0].url 调 /api/v1/generate）
 
-6. 7 天内软删
+6. 7 天内软删（员工 A 本人 OR 企业管理员 OR 系统管理员 都可以）
    DELETE /api/v1/media/MEDIA-XXXXXXXX  {reason: '产品下架'}
    → status='deleted', deleted_at=NOW(), permanent_delete_at=NOW()+7d
 
-7. 误删恢复
+7. 误删恢复（同样权限）
    POST /api/v1/media/MEDIA-XXXXXXXX/restore
    → status='normal'
-
-8. 7 天后系统管理员确认永久删
-   POST /api/v1/media/MEDIA-XXXXXXXX/purge
-   → purged=true
 ```
+
+### 13.2 永久清理路径（合规删除 / 误操作不可恢复场景）
+
+```
+1. （任何状态下的素材 — normal 或 deleted）
+   POST /api/v1/media/MEDIA-XXXXXXXX/purge  (本企业管理员 / 系统管理员)
+   → { media_id: 'MEDIA-XXXXXXXX', purged: true }
+   → DB 记录立即消失;7 天等待窗口跳过
+```
+
+### 13.3 跨权限对比示例
+
+假设 `media_id=MEDIA-XXX` 是企业 A 的员工 B 上传的：
+
+| 调用方 | 是否能 DELETE | 是否能 restore | 是否能 purge |
+| --- | :---: | :---: | :---: |
+| 系统管理员 | ✅ | ✅ | ✅ |
+| 企业 A 的企业管理员 token | ✅ | ✅ | ✅ |
+| 员工 B（创建者）自己的 token | ✅ | ✅ | ❌ |
+| 企业 A 的员工 C（非创建者）token | ❌ | ❌ | ❌ |
+| 企业 X 的任何 token（跨企业） | ❌ | ❌ | ❌ |
 
 ---
 
@@ -397,7 +793,8 @@ curl -X POST http://localhost:8003/api/v1/media \
 | `format` | URL 后缀（jpg/png/mp4...） |
 | `generation_task_id` | 本次 task_id |
 | `generation_prompt` | `request.prompt` |
-| `model_id` | `request.model_name` |
+| `ai_model_id` (BIGINT) | 从 `request.ai_model_id`（或按 `business_model_id` 自动 lookup） — FK 唯一权威 |
+| `generation_model` | **PR-4.9：现在存的是 `request.display_name`（模型展示名，如 `'gpt image 2'`）**，而非 `request.model_name`（上游 ID）。前端卡片直接展示对用户友好；如需稳定 ID 路由请用 LEFT JOIN 出的 `model_id` / `model_display_name` |
 | `generation_params` | `request.parameters`（JSONB） |
 | `tags` | `request.library_tags` |
 | `creator_type` / `creator_id` / `account_id` / `enterprise_id` | 调用方 token 信息 |
@@ -671,115 +1068,5 @@ curl "/api/v1/media/by-type/audio?media_source=generated"
 排序：`created_at DESC`
 
 > **前端推荐**：能用 `/by-source` 或 `/by-type` 就别用通用 endpoint,语义更清晰。
-
----
-
-## 19. Seedance 素材库资源引用集成
-
-> Seedance 2.0 系列模型（`doubao-seedance-2-0-260128` / `doubao-seedance-2-0-fast-260128`）不允许直接上传含人脸的参考图/视频。素材库通过 `seedance_resource_uuid` 字段与 Neolink 资源库对接，实现人像素材的合规授权。
-
-### 19.1 新增字段
-
-`media_library` 表新增 `seedance_resource_uuid` 字段（migration: `35_media_library_seedance_uuid.sql`）：
-
-| 字段 | 类型 | 默认 | 说明 |
-| --- | --- | --- | --- |
-| `seedance_resource_uuid` | string \| NULL | `NULL` | Neolink 资源 UUID，形如 `tkres_xxx`。素材首次被 Seedance 引用时自动写入，后续调用直接命中此字段实现毫秒级返回 |
-
-- 创建素材时该字段为 `NULL`
-- 素材被 Seedance 引用后，后端自动调 Neolink 注册资源，拿到 UUID 后写回此字段
-- 软删素材时**不会**清空此字段
-- 恢复素材后此字段仍然有效
-
-### 19.2 资源注册流程
-
-当生成请求的 `references[]` / `input_files[]` 中包含 `media_id` 时，后端 `SeedanceResourceService.ensure_seedance_resource(media_id)` 执行以下流程：
-
-```
-ensure_seedance_resource(media_id)
-  │
-  ├─ 1. 查询 media_library WHERE media_id = ?
-  │    └─ 不存在 → log 跳过,返回 None（该 ref 保留原样）
-  │
-  ├─ 2. 检查 seedance_resource_uuid 是否已有值
-  │    └─ 有值 → 直接返回 "Asset://{uuid}"（毫秒级,命中缓存）
-  │
-  ├─ 3. 无 UUID → 调 Neolink POST /api/model-resources 注册资源
-  │    └─ 返回新 uuid (tkres_xxx)
-  │
-  ├─ 4. 轮询 GET /api/model-resources/{uuid} 直到 status=1（可用）
-  │    └─ 超时 30s 或 status=failed → 抛异常,整次生成失败
-  │
-  ├─ 5. 写回 media_library.seedance_resource_uuid = uuid
-  │
-  └─ 6. 返回 "Asset://{uuid}"
-```
-
-### 19.3 前端引用方式
-
-在生成请求中，`input_files[]` / `references[]` 元素传 `media_id` 字段（替代或并存 `url`）：
-
-```jsonc
-{
-  "input_files": [
-    {
-      "type": "image",
-      "media_id": "MEDIA-IMG-002",   // ← 引用素材库素材
-      "purpose": "reference",
-      "object_id": "image_1"
-    }
-  ]
-}
-```
-
-**字段优先级**：
-- `media_id` + `url` 都有 → 优先用 `media_id`
-- 只有 `media_id` → 走素材库资源化路径
-- 只有 `url` → 走旧路径（适合非人脸素材）
-
-### 19.4 性能说明
-
-| 调用场景 | 耗时 | 说明 |
-| --- | --- | --- |
-| 首次引用某 media_id | 1-30s | 等 Neolink 同步人像资源 |
-| 同一 media_id 再次引用 | 毫秒级 | 命中 `seedance_resource_uuid` 字段 |
-| 进程重启后首次引用 | 毫秒级 | UUID 已持久化到数据库 |
-
-### 19.5 边界情况
-
-| 场景 | 行为 |
-| --- | --- |
-| media_id 不存在 | log 跳过，该 ref 保留原样 |
-| Neolink 同步超 30s / failed | 整次 Seedance 调用标记失败，前端拿到 5xx |
-| 素材被软删 | `seedance_resource_uuid` 不清空，但 `ensure_seedance_resource` 查不到行 → 等价于 media_id 不存在 |
-| 素材软删后恢复 | UUID 仍在，可直接命中 |
-
-### 19.6 配置开关
-
-| 环境变量 | 默认 | 说明 |
-| --- | --- | --- |
-| `SEEDANCE_RESOURCE_LIBRARY_ENABLED` | `true` | 是否启用素材库资源化路径。`"seedance快捷通道"` 场景应设为 `false` |
-
-### 19.7 相关文件
-
-| 文件 | 用途 |
-| --- | --- |
-| `app/services/seedance_resource_service.py` | 资源注册服务（`ensure_seedance_resource`） |
-| `app/vendors/seedance_resource_client.py` | Neolink API 客户端 |
-| `app/vendors/vendor_b.py` | 集成点（`_generate_video_seedance`） |
-| `database/sql/schema/35_media_library_seedance_uuid.sql` | 数据库 migration |
-
-### 19.8 调试日志关键字
-
-后端控制台出现以下日志，说明资源化路径已触发：
-
-```text
-[SeedanceResource] 注册资源到 Neolink: media_id=...
-[SeedanceResource] poll #1 uuid=tkres_xxx status=2 message=''
-[SeedanceResource] poll #3 uuid=tkres_xxx status=1 message=''
-[SeedanceResource] ✅ 资源注册成功: MEDIA-XXX -> Asset://tkres_xxx
-```
-
-第二次同 media_id 调用：无日志，直接从 `seedance_resource_uuid` 字段命中。
 
 ---

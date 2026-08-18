@@ -4,6 +4,38 @@
 权限：需要 `enterprise` 或 `employee` 类型的 Token（管理员账号无企业配额，会返回 403）  
 Header：`Authorization: Bearer <token>`
 
+> ## 📌 PR-4.11 更新（2026-08-14）：视频定价二维（分辨率 × 音频）
+>
+> **变更**：`ai_models.price_tiers` 从一维 `{分辨率: 单价}` 升级为**二维** `{分辨率: {silent/with_audio: 单价}}`，按视频实际是否生成音频差异化计费。
+>
+> **影响范围**：
+> - `compute_price(video, resolution, with_audio=True/False)` 走二维查找
+> - 音频模式仅两态：`silent` / `with_audio`（禁止其他命名）
+> - video 模型在 admin `POST/PATCH /api/v1/admin/models` 强制二维，缺 `silent` 或 `with_audio` → `400 INVALID_PRICE_TIERS`
+> - image / audio 媒体类型仍允许一维（向后兼容）
+>
+> **前端使用建议**：
+> - 视频生成时显式传 `audio_generation: true/false`，决定走 `with_audio` 还是 `silent` 价
+> - 估算价格时（`/billing/estimate-price`）：传 `with_audio` 即可拿到正确单价
+>
+> **历史数据**：所有 video 模型的 `price_tiers` 已通过 49 SQL 迁移为二维（`with_audio = silent × 1.5` 起步），可手动 PATCH 微调。
+
+> ## 📌 PR-4.9 更新（2026-08-12）：账单/任务详情字段语义统一
+>
+> **变更**：`quota_transactions.related_model_id` 和 `generation_tasks.model_id`（即账单响应里的 `decoded_generation_params.model`）字段写入语义从**上游 ID**（如 `gp-im-2`）改为**模型展示名**（如 `gpt image 2`，即 `ai_models.display_name`）。
+>
+> **影响范围**：
+> - `/billing/transactions` 响应的 `related_model_id` 字段 — 现在存展示名
+> - `/billing/tasks/{task_id}` 响应的 `decoded_generation_params.model` 字段 — 现在存展示名
+> - `/billing/tasks/{task_id}` 响应的 `model_id` 顶层字段（PR-4.9 注入） — 也是展示名
+>
+> **前端使用建议**：
+> - 账单流水页展示 → 直接用 `related_model_id`
+> - 任务详情卡片标题 → 用 `decoded_generation_params.model`
+> - 如果需要稳定的业务 ID 做回调路由，请用 JOIN `ai_models.business_model_id` 字段（不在此接口响应中）
+>
+> **历史数据**：旧任务（PR-4.9 之前）的 `model_id` 列存的是上游 ID 或业务 ID，不影响新任务写入。
+
 ---
 
 ## 接口一览
@@ -179,8 +211,8 @@ GET /api/v1/billing/transactions
         "balance_before": 1000.00,
         "balance_after": 997.50,
         "related_task_id": "task_20260624_xxx",
-        "related_model_id": "doubao-seedance-2-0-fast-260128",
-        "description": "生成消费 task=task_xxx model=doubao-seedance-2-0-fast-260128",
+        "related_model_id": "豆包 Seedance 2.0 Fast",
+        "description": "生成消费 task=task_xxx model=豆包 Seedance 2.0 Fast",
         "created_at": "2026-06-24T11:25:30"
       }
     ],
@@ -199,7 +231,7 @@ GET /api/v1/billing/transactions
 | `balance_before` | float | 变动前余额 |
 | `balance_after` | float | 变动后余额 |
 | `related_task_id` | string | 关联任务 ID（消费/退款时） |
-| `related_model_id` | string | 关联模型 ID（消费时） |
+| `related_model_id` | string | 关联模型的**展示名**（PR-4.9：即 `ai_models.display_name`，如 `"豆包 Seedance 2.0 Fast"`）。前端账单/流水页直接展示，不需要再 JOIN 翻译 |
 
 ---
 
@@ -259,15 +291,25 @@ GET /api/v1/billing/tasks/{task_id}
   "data": {
     "task_id": "task_20260624_xxx",
     "account_id": "shuquzhi51010001",
-    "model_name": "doubao-seedance-2-0-fast-260128",
+    "model_id": "豆包 Seedance 2.0 Fast",
     "status": "completed",
     "price_snapshot": 2.50,
     "quota_used": 2.50,
     "output_url": "https://...",
-    "created_at": "2026-06-24T11:23:46"
+    "created_at": "2026-06-24T11:23:46",
+    "decoded_generation_params": {
+      "model": "豆包 Seedance 2.0 Fast",
+      "output_type": "video",
+      "feature": "text_to_video",
+      "ratio": "16:9",
+      "resolution": "1080P",
+      "duration": 5
+    }
   }
 }
 ```
+
+> **PR-4.9 说明**：`model_id` / `decoded_generation_params.model` 字段现在存的是 `ai_models.display_name`（模型展示名，如 `"豆包 Seedance 2.0 Fast"`），而不是上游 ID（如 `doubao-seedance-2-0-fast-260128`）或业务 ID。这样账单/详情页可以直接展示，不需要再翻译。如果前端需要稳定 ID 用于回调/路由，请使用 JOIN 出的 `business_model_id`（不在此接口响应中，需要另查 `ai_models`）。
 
 ### 错误码
 

@@ -322,15 +322,15 @@
               <div v-if="currentTestingModel" class="current-testing">
                 <i data-lucide="loader-2" class="spin-icon"></i>
                 <template v-if="isStopping">
-                  正在接收数据: <strong>{{ currentTestingModel.name }}</strong>
+                  正在接收数据: <strong>{{ currentTestingModel.display_name || currentTestingModel.name }}</strong>
                   ({{ currentResolution }}) - 等待完成后停止
                 </template>
                 <template v-else-if="isPaused">
-                  暂停于: <strong>{{ currentTestingModel.name }}</strong>
+                  暂停于: <strong>{{ currentTestingModel.display_name || currentTestingModel.name }}</strong>
                   ({{ currentResolution }}) - 当前任务完成后暂停
                 </template>
                 <template v-else>
-                  正在测试: <strong>{{ currentTestingModel.name }}</strong>
+                  正在测试: <strong>{{ currentTestingModel.display_name || currentTestingModel.name }}</strong>
                   ({{ currentResolution }})
                 </template>
               </div>
@@ -498,7 +498,7 @@
                 />
                 <span class="model-index">{{ index + 1 }}</span>
                 <div class="model-info-wrapper">
-                  <span class="model-name-mini">{{ model.name }}</span>
+                  <span class="model-name-mini">{{ model.display_name || model.name }}</span>
                   <div class="model-tags-row">
                     <span v-if="model.is_default" class="model-tag-badge default">推荐</span>
                     <span v-if="model.vendor_name" class="model-tag-badge vendor">{{ model.vendor_name }}</span>
@@ -2028,18 +2028,11 @@ async function fetchModels() {
   }
 }
 
-// 根据模型+分辨率获取实际提交的 model ID（处理变体切换）
-function resolveSubmitModelId(model, resolutionKey) {
-  if (model._hasResolutionVariants && model._resolutionVariants) {
-    const targetRes = String(resolutionKey || '').toLowerCase()
-    const variantModelId = model._resolutionVariants[targetRes]
-    if (variantModelId) {
-      return String(variantModelId).trim()
-    }
-    const firstVariant = Object.values(model._resolutionVariants)[0]
-    return String(firstVariant || model.id || '').trim()
-  }
-  return String(model.id || '').trim()
+// 生成接口只接收稳定业务 ID；分辨率由 parameters.resolution 交给后端路由上游模型。
+function resolveSubmitModelId(model) {
+  const businessModelId = String(model?.business_model_id || '').trim()
+  if (businessModelId) return businessModelId
+  return String(model?.id || model?.model_id || '').trim().replace(/_vendor_[ab]$/i, '')
 }
 
 function switchType(typeId) {
@@ -2189,6 +2182,14 @@ async function startBatchTest() {
   }
 }
 
+function getModelIdentity(model) {
+  return [model?.business_model_id, model?.id, model?.model_id, model?.name, model?.display_name]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
+    .replaceAll('_', '-')
+}
+
 async function runSingleTest(model, resolution) {
   if (isUnmounted.value) {
     console.log('⚠️ 组件已卸载，跳过测试')
@@ -2200,7 +2201,7 @@ async function runSingleTest(model, resolution) {
   const resultId = `test_${runSingleTestIdCounter++}_${model.id}_${resolution}_${startTime}`
   const createTestingResult = () => ({
     id: resultId,
-    modelName: model.name,
+    modelName: model.display_name || model.name,
     modelId: model.id,
     vendor: model.vendor_name,
     type: selectedType.value,
@@ -2265,8 +2266,8 @@ async function runSingleTest(model, resolution) {
   try {
     if (isUnmounted.value) throw new Error('组件已卸载')
 
-    // === 1. 解析实际提交的 model ID（处理分辨率变体切换 + __img/__vid 后缀）===
-    const rawModelId = resolveSubmitModelId(model, resolution)
+    // === 1. 解析稳定业务 model ID（兼容移除前端类型后缀）===
+    const rawModelId = resolveSubmitModelId(model)
     let apiModelId = String(rawModelId || '')
     const suffixPattern = /__(img|vid|aud)$/
     if (suffixPattern.test(apiModelId)) {
@@ -2347,7 +2348,7 @@ async function runSingleTest(model, resolution) {
         ratio: selectedRatio.value,
         count: 1
       }
-      const modelIdLower = apiModelId.toLowerCase()
+      const modelIdLower = getModelIdentity(model)
       // GPT 图像模型专属参数
       if (modelIdLower.includes('gpt-image') || modelIdLower.includes('chatgpt-image') || modelIdLower.includes('dall-e')) {
         requestBody.parameters.quality = 'auto'

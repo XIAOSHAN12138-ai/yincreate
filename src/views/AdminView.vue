@@ -262,9 +262,9 @@
         </div>
 
         <div class="search-action-bar">
-          <div class="table-header-row">
+          <div class="table-header-row model-list-toolbar">
             <h3 class="table-title">模型列表（共 {{ filteredModels.length }} 个）</h3>
-            <div class="header-actions" style="position:relative;z-index:10;">
+            <div class="header-actions model-list-toolbar-actions" style="position:relative;z-index:10;">
               <div class="search-wrap-member">
                 <i data-lucide="search" style="width: 16px; height: 16px; color: #9ca3af;"></i>
                 <input v-model="modelSearch" type="text" placeholder="搜索模型ID/名称..." class="search-input-member" @input="onModelSearchChange">
@@ -290,6 +290,14 @@
                 <input type="checkbox" v-model="showDeletedModels" @change="toggleDeletedView">
                 <span class="checkbox-label">回收站</span>
               </label>
+              <button
+                class="model-batch-delete-btn"
+                :disabled="selectedModelIds.length === 0 || isBatchDeletingModels"
+                @click="batchDeleteModels"
+              >
+                <i data-lucide="trash-2" style="width: 14px; height: 14px;"></i>
+                {{ isBatchDeletingModels ? '删除中...' : `批量删除${selectedModelIds.length ? ` (${selectedModelIds.length})` : ''}` }}
+              </button>
               <button class="export-btn" @click="handleSyncFromJson" title="从 JSON 重新灌入模型库">
                 <i data-lucide="refresh-cw" style="width: 14px; height: 14px;"></i> 同步JSON
               </button>
@@ -299,11 +307,23 @@
             </div>
           </div>
 
+          <div class="model-table-wrap">
           <table class="account-table model-table">
             <thead>
               <tr>
+                <th class="model-select-cell">
+                  <input
+                    type="checkbox"
+                    :checked="areAllFilteredModelsSelected"
+                    :indeterminate="areSomeFilteredModelsSelected"
+                    :disabled="filteredModels.length === 0"
+                    title="全选当前筛选结果"
+                    @change="toggleAllFilteredModels"
+                  >
+                </th>
                 <th>ID</th>
                 <th>模型ID</th>
+                <th>业务模型ID</th>
                 <th>展示名</th>
                 <th>厂商</th>
                 <th>类型</th>
@@ -318,8 +338,17 @@
             </thead>
             <tbody>
               <tr v-for="m in pagedModels" :key="m.id" :class="{ 'deleted-row': m.deleted_at }">
+                <td class="model-select-cell">
+                  <input
+                    type="checkbox"
+                    :checked="selectedModelIds.includes(m.model_id)"
+                    :aria-label="`选择模型 ${m.display_name || m.model_id}`"
+                    @change="toggleModelSelection(m.model_id)"
+                  >
+                </td>
                 <td>{{ m.id }}<span v-if="m.deleted_at" class="deleted-badge" title="已软删">已删</span></td>
                 <td><code class="mono-text">{{ m.model_id }}</code></td>
+                <td><code class="mono-text">{{ m.business_model_id || '-' }}</code></td>
                 <td>
                   <div class="model-name-cell">
                     <strong>{{ m.display_name }}</strong>
@@ -331,17 +360,14 @@
                 <td><span :class="['vendor-badge', `vendor-${m.vendor}`]">{{ getVendorLabel(m.vendor) }}</span></td>
                 <td><span :class="['media-type-badge', `media-${m.media_type}`]">{{ getMediaTypeLabel(m.media_type) }}</span></td>
                 <td class="price-cell">
-                  <div v-if="m.price_per_second != null" class="price-line">
-                    <span class="price-val">{{ m.price_per_second }}积分/秒</span>
-                    <span v-if="m.price_multiplier && m.price_multiplier !== 1" class="price-mult">×{{ m.price_multiplier }}</span>
-                  </div>
-                  <div v-else-if="m.price_per_request != null" class="price-line">
-                    <span class="price-val">{{ m.price_per_request }}积分/次</span>
+                  <div v-if="m._pricingLoading" class="price-line"><span class="price-val text-secondary-small">加载中...</span></div>
+                  <div v-else-if="m.price_tiers && Object.keys(m.price_tiers).length" class="price-line">
+                    <span class="price-val">{{ formatPriceTiers(m.price_tiers, m.media_type) }}</span>
                     <span v-if="m.price_multiplier && m.price_multiplier !== 1" class="price-mult">×{{ m.price_multiplier }}</span>
                   </div>
                   <div v-else class="price-line"><span class="price-val text-secondary-small">未定价</span></div>
                   <div v-if="m.price_tiers && Object.keys(m.price_tiers).length" class="price-tiers-mini">
-                    {{ Object.keys(m.price_tiers).length }} 档分级
+                    {{ Object.keys(m.price_tiers).length }} 档 · {{ m.currency || 'CNY' }}
                   </div>
                 </td>
                 <td><span :class="['status-badge', getModelStatusClass(m.status)]">{{ getStatusLabel(m.status) }}</span></td>
@@ -368,10 +394,11 @@
                 </td>
               </tr>
               <tr v-if="filteredModels.length === 0">
-                <td colspan="10" class="empty-row">暂无模型数据</td>
+                <td colspan="14" class="empty-row">暂无模型数据</td>
               </tr>
             </tbody>
           </table>
+          </div>
 
           <div class="pagination-dept">
             <button class="page-btn-dept" :disabled="modelPage === 1" @click="modelPage--"><i data-lucide="chevron-left" style="width: 14px; height: 14px;"></i></button>
@@ -740,13 +767,19 @@
               <h4 class="form-section-title"><i data-lucide="info" style="width: 14px; height: 14px;"></i> 基础信息</h4>
               <div class="form-row-2">
                 <div class="form-group">
-                  <label class="form-label">模型ID (model_id) <span class="required">*</span></label>
-                  <input type="text" v-model="modelForm.model_id" placeholder="例如 kling_3_0" class="form-input" :disabled="!!editingModel">
-                  <span class="form-hint-text">业务唯一标识，创建后不可修改</span>
+                  <label class="form-label">业务模型ID (business_model_id) <span class="required">*</span></label>
+                  <input type="text" v-model="modelForm.business_model_id" placeholder="例如 happyhorse_1_0" class="form-input" required>
+                  <span class="form-hint-text">稳定业务标识；创建时同时作为内部模型 ID，编辑时将提交修改后的值</span>
                 </div>
                 <div class="form-group">
                   <label class="form-label">展示名 (display_name) <span class="required">*</span></label>
                   <input type="text" v-model="modelForm.display_name" placeholder="例如 Kling 3.0" class="form-input">
+                </div>
+              </div>
+              <div class="form-row-2">
+                <div class="form-group">
+                  <label class="form-label">生成类型 (generation_type)</label>
+                  <input type="text" v-model="modelForm.generation_type" placeholder="例如 image_to_video" class="form-input">
                 </div>
               </div>
               <div class="form-row-2">
@@ -768,7 +801,7 @@
                 </div>
                 <div class="form-group">
                   <label class="form-label">类型 (media_type) <span class="required">*</span></label>
-                  <select v-model="modelForm.media_type" class="form-select">
+                  <select v-model="modelForm.media_type" class="form-select" @change="handleModelMediaTypeChange">
                     <option v-for="t in mediaTypeOptions" :key="t.value" :value="t.value">{{ t.label }}</option>
                   </select>
                 </div>
@@ -796,6 +829,44 @@
               <div class="form-group">
                 <label class="form-label">标签（逗号分隔）</label>
                 <input type="text" v-model="modelForm.tagsText" placeholder="例如 高清,快速,VIP" class="form-input">
+              </div>
+
+              <h4 class="form-section-title"><i data-lucide="route" style="width: 14px; height: 14px;"></i> 上游路由</h4>
+              <div class="form-row-2">
+                <div class="form-group">
+                  <label class="form-label">主端点 (endpoint) <span v-if="modelForm.vendor !== 'vendor_a'" class="required">*</span></label>
+                  <input type="text" v-model="modelForm.endpoint" placeholder="openai_videos:/v1/videos" class="form-input" :required="modelForm.vendor !== 'vendor_a'">
+                </div>
+                <div class="form-group">
+                  <label class="form-label">备用端点 (endpoint_2)</label>
+                  <input type="text" v-model="modelForm.endpoint_2" placeholder="可选备用路由" class="form-input">
+                </div>
+              </div>
+              <div class="form-row-2">
+                <div class="form-group">
+                  <label class="form-label">上游模型ID兜底 (upstream_model_id)</label>
+                  <input type="text" v-model="modelForm.upstream_model_id" placeholder="单上游场景可填写" class="form-input">
+                </div>
+              </div>
+              <div class="form-group">
+                <div class="pricing-editor-header">
+                  <label class="form-label">分辨率上游路由 <span class="required">*</span></label>
+                  <button type="button" class="pricing-add-btn" @click="addKeyValueRow(modelForm.upstream_id_by_resolution)">+ 添加路由</button>
+                </div>
+                <div class="pricing-table-wrap">
+                  <table class="pricing-table route-table">
+                    <thead><tr><th>分辨率 / 尺寸键</th><th>上游模型 ID</th><th>操作</th></tr></thead>
+                    <tbody>
+                      <tr v-for="(route, index) in modelForm.upstream_id_by_resolution" :key="index">
+                        <td><input v-model.trim="route.key" class="form-input" placeholder="例如 720P / default"></td>
+                        <td><input v-model.trim="route.value" class="form-input" placeholder="happyhorse-1.0-i2v-720p"></td>
+                        <td><button type="button" class="pricing-remove-btn" @click="removeKeyValueRow(modelForm.upstream_id_by_resolution, index)">删除</button></td>
+                      </tr>
+                      <tr v-if="modelForm.upstream_id_by_resolution.length === 0"><td colspan="3" class="pricing-empty">暂无路由，请点击“添加路由”</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+                <span class="form-hint-text">JSON 对象；键为分辨率/尺寸，值为上游私有 ID</span>
               </div>
 
               <!-- 能力配置 -->
@@ -832,6 +903,30 @@
                   <input type="text" v-model="modelForm.supported_aspect_ratios_text" placeholder="16:9,9:16,1:1" class="form-input">
                 </div>
               </div>
+              <div class="form-group">
+                <div class="pricing-editor-header">
+                  <label class="form-label">分辨率候选上游 ID (resolution_variants)</label>
+                  <button type="button" class="pricing-add-btn" @click="addKeyValueRow(modelForm.resolution_variants)">+ 添加映射</button>
+                </div>
+                <div class="pricing-table-wrap">
+                  <table class="pricing-table route-table">
+                    <thead><tr><th>标准分辨率</th><th>候选上游私有 ID（按顺序回退）</th><th>操作</th></tr></thead>
+                    <tbody>
+                      <tr v-for="(row, index) in modelForm.resolution_variants" :key="index">
+                        <td><input v-model.trim="row.key" class="form-input" placeholder="例如 720P"></td>
+                        <td><input v-model="row.value" class="form-input" placeholder="主上游ID,备用上游ID"></td>
+                        <td><button type="button" class="pricing-remove-btn" @click="removeKeyValueRow(modelForm.resolution_variants, index)">删除</button></td>
+                      </tr>
+                      <tr v-if="modelForm.resolution_variants.length === 0"><td colspan="3" class="pricing-empty">暂无分辨率变体，点击“添加映射”新增</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+                <span class="form-hint-text">保存为 JSON 映射，例如 {"720P":["main-720p","fallback-720p"]}；调用时按列表顺序回退。</span>
+              </div>
+              <div class="form-group">
+                <label class="form-label">支持时长（秒，逗号分隔）</label>
+                <input type="text" v-model="modelForm.supported_durations_text" placeholder="5,10" class="form-input">
+              </div>
               <div class="form-row-3">
                 <div class="form-group">
                   <label class="form-label">最大宽度</label>
@@ -860,35 +955,68 @@
                   <input type="number" v-model.number="modelForm.max_fps" placeholder="30" class="form-input" min="1" max="60">
                 </div>
               </div>
+              <div class="form-row-3">
+                <div class="form-group">
+                  <label class="form-label">最大参考图片数</label>
+                  <input type="number" v-model.number="modelForm.max_reference_images" class="form-input" min="0">
+                </div>
+                <div class="form-group">
+                  <label class="form-label">最大参考视频数</label>
+                  <input type="number" v-model.number="modelForm.max_reference_videos" class="form-input" min="0">
+                </div>
+                <div class="form-group">
+                  <label class="form-label">最大参考音频数</label>
+                  <input type="number" v-model.number="modelForm.max_reference_audios" class="form-input" min="0">
+                </div>
+              </div>
+              <div class="form-row-2">
+                <div class="form-group">
+                  <label class="form-label">是否需要输入素材</label>
+                  <select v-model="modelForm.requires_input" class="form-select">
+                    <option :value="null">自动推断</option>
+                    <option :value="true">是</option>
+                    <option :value="false">否</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">输入素材配额 (input_materials JSON)</label>
+                  <div class="pricing-table-wrap">
+                    <table class="pricing-table material-quota-table">
+                      <thead><tr><th>素材类型</th><th>最大数量</th></tr></thead>
+                      <tbody>
+                        <tr><td>图片 (image)</td><td><input type="number" v-model.number="modelForm.input_materials.image" min="0" step="1" class="form-input"></td></tr>
+                        <tr><td>视频 (video)</td><td><input type="number" v-model.number="modelForm.input_materials.video" min="0" step="1" class="form-input"></td></tr>
+                        <tr><td>音频 (audio)</td><td><input type="number" v-model.number="modelForm.input_materials.audio" min="0" step="1" class="form-input"></td></tr>
+                      </tbody>
+                    </table>
+                  </div>
+                  <span class="form-hint-text">填写每种输入素材允许的最大数量，0 表示不支持；保存时仍提交 JSON 对象。</span>
+                </div>
+              </div>
               <div class="form-group">
                 <label class="form-label">声音模式</label>
-                <select v-model="modelForm.sound_mode" class="form-select">
+                <select v-model="modelForm.sound_mode" class="form-select" @change="handleSoundModeChange">
                   <option :value="null">不适用（非视频模型）</option>
                   <option v-for="sm in soundModeOptions" :key="sm.value" :value="sm.value">{{ sm.label }}</option>
                 </select>
                 <span class="form-hint-text">仅视频模型有效</span>
               </div>
+              <div v-if="modelForm.media_type === 'video'" class="form-group">
+                <label class="checkbox-item">
+                  <input type="checkbox" v-model="modelForm.supports_audio" @change="handleSupportsAudioChange">
+                  <span>支持音频生成 (supports_audio)</span>
+                </label>
+                <span class="form-hint-text">开启后用户端可使用有声/无声切换</span>
+              </div>
 
               <!-- 积分定价配置 -->
               <h4 class="form-section-title"><i data-lucide="badge-dollar-sign" style="width: 14px; height: 14px;"></i> 积分定价配置</h4>
-              <div class="form-row-3">
-                <div class="form-group">
-                  <label class="form-label">按次消耗 (price_per_request)</label>
-                  <input type="number" step="1" v-model.number="modelForm.price_per_request" placeholder="15（图像/音频）" class="form-input" min="0">
-                  <span class="form-hint-text">每次生成消耗的积分数</span>
-                </div>
-                <div class="form-group">
-                  <label class="form-label">按秒消耗 (price_per_second)</label>
-                  <input type="number" step="1" v-model.number="modelForm.price_per_second" placeholder="50（视频）" class="form-input" min="0">
-                  <span class="form-hint-text">每秒生成消耗的积分数</span>
-                </div>
+              <div class="form-row-2">
                 <div class="form-group">
                   <label class="form-label">消耗倍率 (price_multiplier)</label>
                   <input type="number" step="0.01" v-model.number="modelForm.price_multiplier" placeholder="1.00" class="form-input" min="0">
                   <span class="form-hint-text">1.00=原价，1.20=加价20%</span>
                 </div>
-              </div>
-              <div class="form-row-2">
                 <div class="form-group">
                   <label class="form-label">积分单位</label>
                   <select v-model="modelForm.currency" class="form-input">
@@ -899,11 +1027,28 @@
                   </select>
                   <span class="form-hint-text">选择计费货币单位</span>
                 </div>
-                <div class="form-group">
-                  <label class="form-label">分级定价 (price_tiers JSON)</label>
-                  <textarea v-model="modelForm.price_tiers_text" placeholder='{"720p":30,"1080p":50,"4K":240}' class="form-textarea" rows="2"></textarea>
-                  <span class="form-hint-text">键=分辨率，值=每秒/每次积分数。留空则使用上面的按次/按秒价</span>
+              </div>
+              <div class="form-group">
+                <div class="pricing-editor-header">
+                  <label class="form-label">分级定价 (price_tiers JSON) <span class="required">*</span></label>
+                  <button type="button" class="pricing-add-btn" @click="addPriceTierRow(modelForm.price_tiers, modelForm.media_type)">+ 添加价格档</button>
                 </div>
+                <div class="pricing-table-wrap">
+                  <table class="pricing-table">
+                    <thead><tr><th>分辨率 / 尺寸键</th><th v-if="modelForm.media_type === 'video'">静音单价</th><th v-if="modelForm.media_type === 'video'">含音频单价</th><th v-else>单价</th><th>操作</th></tr></thead>
+                    <tbody>
+                      <tr v-for="(tier, index) in modelForm.price_tiers" :key="index">
+                        <td><input v-model.trim="tier.key" class="form-input" placeholder="例如 720P / default"></td>
+                        <td v-if="modelForm.media_type === 'video'"><input v-model.number="tier.silent" type="number" min="0" step="0.01" class="form-input" placeholder="0.30"></td>
+                        <td v-if="modelForm.media_type === 'video'"><input v-model.number="tier.with_audio" type="number" min="0" step="0.01" class="form-input" placeholder="0.45"></td>
+                        <td v-else><input v-model.number="tier.value" type="number" min="0" step="0.01" class="form-input" placeholder="0.30"></td>
+                        <td><button type="button" class="pricing-remove-btn" @click="removeKeyValueRow(modelForm.price_tiers, index)">删除</button></td>
+                      </tr>
+                      <tr v-if="modelForm.price_tiers.length === 0"><td :colspan="modelForm.media_type === 'video' ? 4 : 3" class="pricing-empty">暂无价格档，请点击“添加价格档”</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+                <span class="form-hint-text">视频模型每档必须同时填写静音和含音频单价；图片/音频保持一维单价。建议提供 default 兜底。</span>
               </div>
 
               <!-- 启停 -->
@@ -936,6 +1081,8 @@
               <div class="detail-grid">
                 <div class="detail-item"><span class="detail-label">ID</span><span class="detail-value">#{{ selectedModelDetail.id }}</span></div>
                 <div class="detail-item"><span class="detail-label">模型ID</span><span class="detail-value mono-text">{{ selectedModelDetail.model_id }}</span></div>
+                <div class="detail-item"><span class="detail-label">业务模型ID</span><span class="detail-value mono-text">{{ selectedModelDetail.business_model_id || '-' }}</span></div>
+                <div class="detail-item"><span class="detail-label">生成类型</span><span class="detail-value mono-text">{{ selectedModelDetail.generation_type || '-' }}</span></div>
                 <div class="detail-item"><span class="detail-label">模型名</span><span class="detail-value">{{ selectedModelDetail.model_name }}</span></div>
                 <div class="detail-item"><span class="detail-label">版本号</span><span class="detail-value">{{ selectedModelDetail.model_version }}</span></div>
                 <div class="detail-item"><span class="detail-label">展示名</span><span class="detail-value">{{ selectedModelDetail.display_name }}</span></div>
@@ -946,18 +1093,65 @@
                 <div class="detail-item"><span class="detail-label">启用</span><span :class="['status-badge', selectedModelDetail.is_enabled ? 'status-active' : 'status-expired']">{{ selectedModelDetail.is_enabled ? '已启用' : '已停用' }}</span></div>
                 <div class="detail-item"><span class="detail-label">可用区域</span><span class="detail-value">{{ selectedModelDetail.availability_region || '-' }}</span></div>
                 <div class="detail-item"><span class="detail-label">积分单位</span><span class="detail-value">{{ selectedModelDetail.currency || 'POINTS' }}</span></div>
-                <div class="detail-item"><span class="detail-label">按次消耗</span><span class="detail-value">{{ selectedModelDetail.price_per_request != null ? selectedModelDetail.price_per_request + '积分' : '-' }}</span></div>
-                <div class="detail-item"><span class="detail-label">按秒消耗</span><span class="detail-value">{{ selectedModelDetail.price_per_second != null ? selectedModelDetail.price_per_second + '积分' : '-' }}</span></div>
                 <div class="detail-item"><span class="detail-label">消耗倍率</span><span class="detail-value">×{{ selectedModelDetail.price_multiplier ?? 1 }}</span></div>
+                <div class="detail-item"><span class="detail-label">支持音频</span><span class="detail-value">{{ selectedModelDetail.supports_audio ? '是' : '否' }}</span></div>
                 <div class="detail-item"><span class="detail-label">最大尺寸</span><span class="detail-value">{{ selectedModelDetail.max_width || '-' }}×{{ selectedModelDetail.max_height || '-' }}</span></div>
                 <div class="detail-item"><span class="detail-label">最小尺寸</span><span class="detail-value">{{ selectedModelDetail.min_width || '-' }}×{{ selectedModelDetail.min_height || '-' }}</span></div>
                 <div class="detail-item"><span class="detail-label">最大时长</span><span class="detail-value">{{ selectedModelDetail.max_duration || '-' }} 秒</span></div>
                 <div class="detail-item"><span class="detail-label">最大帧率</span><span class="detail-value">{{ selectedModelDetail.max_fps || '-' }} fps</span></div>
+                <div class="detail-item"><span class="detail-label">最大参考素材</span><span class="detail-value">图 {{ selectedModelDetail.max_reference_images ?? '-' }} / 视频 {{ selectedModelDetail.max_reference_videos ?? '-' }} / 音频 {{ selectedModelDetail.max_reference_audios ?? '-' }}</span></div>
+                <div class="detail-item"><span class="detail-label">需要输入素材</span><span class="detail-value">{{ selectedModelDetail.requires_input == null ? '自动推断' : (selectedModelDetail.requires_input ? '是' : '否') }}</span></div>
+                <div class="detail-item detail-full"><span class="detail-label">主端点</span><span class="detail-value mono-text">{{ selectedModelDetail.endpoint || '-' }}</span></div>
+                <div class="detail-item detail-full"><span class="detail-label">备用端点</span><span class="detail-value mono-text">{{ selectedModelDetail.endpoint_2 || '-' }}</span></div>
+                <div class="detail-item detail-full pricing-detail-item">
+                  <span class="detail-label">上游ID路由</span>
+                  <div v-if="selectedModelDetail.upstream_id_by_resolution && Object.keys(selectedModelDetail.upstream_id_by_resolution).length" class="pricing-table-wrap detail-pricing-table">
+                    <table class="pricing-table route-table">
+                      <thead><tr><th>分辨率 / 尺寸键</th><th>上游模型 ID</th></tr></thead>
+                      <tbody><tr v-for="(value, key) in selectedModelDetail.upstream_id_by_resolution" :key="key"><td>{{ key }}</td><td>{{ value }}</td></tr></tbody>
+                    </table>
+                  </div>
+                  <span v-else class="detail-value">-</span>
+                </div>
+                <div class="detail-item detail-full pricing-detail-item">
+                  <span class="detail-label">输入素材配额</span>
+                  <div class="pricing-table-wrap detail-pricing-table">
+                    <table class="pricing-table material-quota-table">
+                      <thead><tr><th>素材类型</th><th>最大数量</th></tr></thead>
+                      <tbody>
+                        <tr><td>图片 (image)</td><td>{{ selectedModelDetail.input_materials?.image ?? 0 }}</td></tr>
+                        <tr><td>视频 (video)</td><td>{{ selectedModelDetail.input_materials?.video ?? 0 }}</td></tr>
+                        <tr><td>音频 (audio)</td><td>{{ selectedModelDetail.input_materials?.audio ?? 0 }}</td></tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
                 <div class="detail-item detail-full"><span class="detail-label">支持特性</span><span class="detail-value">{{ (selectedModelDetail.supported_features || []).join('、') || '-' }}</span></div>
                 <div class="detail-item detail-full"><span class="detail-label">支持分辨率</span><span class="detail-value">{{ (selectedModelDetail.supported_resolutions || []).join('、') || '-' }}</span></div>
+                <div class="detail-item detail-full pricing-detail-item">
+                  <span class="detail-label">分辨率候选上游 ID</span>
+                  <div v-if="selectedModelDetail.resolution_variants && Object.keys(selectedModelDetail.resolution_variants).length" class="pricing-table-wrap detail-pricing-table">
+                    <table class="pricing-table route-table">
+                      <thead><tr><th>标准分辨率</th><th>候选上游私有 ID（按顺序回退）</th></tr></thead>
+                      <tbody><tr v-for="(variants, resolution) in selectedModelDetail.resolution_variants" :key="resolution"><td>{{ resolution }}</td><td>{{ variants.join('、') }}</td></tr></tbody>
+                    </table>
+                  </div>
+                  <span v-else class="detail-value">-</span>
+                </div>
                 <div class="detail-item detail-full"><span class="detail-label">支持宽高比</span><span class="detail-value">{{ (selectedModelDetail.supported_aspect_ratios || []).join('、') || '-' }}</span></div>
+                <div class="detail-item detail-full"><span class="detail-label">支持时长</span><span class="detail-value">{{ (selectedModelDetail.supported_durations || []).join('、') || '-' }}</span></div>
+                <div class="detail-item detail-full"><span class="detail-label">支持尺寸</span><span class="detail-value">{{ (selectedModelDetail.supported_sizes || []).join('、') || '-' }}</span></div>
                 <div class="detail-item detail-full"><span class="detail-label">标签</span><span class="detail-value">{{ (selectedModelDetail.tags || []).join('、') || '-' }}</span></div>
-                <div class="detail-item detail-full"><span class="detail-label">分级定价</span><span class="detail-value mono-text">{{ selectedModelDetail.price_tiers ? JSON.stringify(selectedModelDetail.price_tiers) : '-' }}</span></div>
+                <div class="detail-item detail-full pricing-detail-item">
+                  <span class="detail-label">分级定价</span>
+                  <div v-if="selectedModelDetail.price_tiers && Object.keys(selectedModelDetail.price_tiers).length" class="pricing-table-wrap detail-pricing-table">
+                    <table class="pricing-table">
+                      <thead><tr><th>分辨率 / 尺寸键</th><th v-if="selectedModelDetail.media_type === 'video'">静音单价</th><th v-if="selectedModelDetail.media_type === 'video'">含音频单价</th><th v-else>单价</th></tr></thead>
+                      <tbody><tr v-for="(value, key) in selectedModelDetail.price_tiers" :key="key"><td>{{ key }}</td><template v-if="selectedModelDetail.media_type === 'video'"><td>{{ getVideoTierPrice(value, 'silent') }} {{ selectedModelDetail.currency || 'CNY' }}</td><td>{{ getVideoTierPrice(value, 'with_audio') }} {{ selectedModelDetail.currency || 'CNY' }}</td></template><td v-else>{{ value }} {{ selectedModelDetail.currency || 'CNY' }}</td></tr></tbody>
+                    </table>
+                  </div>
+                  <span v-else class="detail-value">-</span>
+                </div>
                 <div class="detail-item detail-full"><span class="detail-label">描述</span><span class="detail-value">{{ selectedModelDetail.description || '-' }}</span></div>
                 <div class="detail-item"><span class="detail-label">创建时间</span><span class="detail-value">{{ selectedModelDetail.created_at }}</span></div>
                 <div class="detail-item"><span class="detail-label">更新时间</span><span class="detail-value">{{ selectedModelDetail.updated_at }}</span></div>
@@ -1087,18 +1281,48 @@
                   <input type="text" v-model="cloneForm.model_version" placeholder="留空则沿用源版本" class="form-input">
                 </div>
                 <div class="form-group">
-                  <label class="form-label">按次消耗</label>
-                  <input type="number" step="1" v-model.number="cloneForm.price_per_request" placeholder="留空则沿用源定价" class="form-input" min="0">
-                </div>
-              </div>
-              <div class="form-row-2">
-                <div class="form-group">
-                  <label class="form-label">按秒消耗</label>
-                  <input type="number" step="1" v-model.number="cloneForm.price_per_second" placeholder="留空则沿用源定价" class="form-input" min="0">
-                </div>
-                <div class="form-group">
                   <label class="form-label">消耗倍率</label>
                   <input type="number" step="0.01" v-model.number="cloneForm.price_multiplier" placeholder="留空则沿用源倍率" class="form-input" min="0">
+                </div>
+              </div>
+              <div class="form-group">
+                <div class="pricing-editor-header">
+                  <label class="form-label">分级定价 (price_tiers JSON)</label>
+                  <button type="button" class="pricing-add-btn" @click="addPriceTierRow(cloneForm.price_tiers, cloneSourceModel?.media_type)">+ 添加价格档</button>
+                </div>
+                <div class="pricing-table-wrap">
+                  <table class="pricing-table">
+                    <thead><tr><th>分辨率 / 尺寸键</th><th v-if="cloneSourceModel?.media_type === 'video'">静音单价</th><th v-if="cloneSourceModel?.media_type === 'video'">含音频单价</th><th v-else>单价</th><th>操作</th></tr></thead>
+                    <tbody>
+                      <tr v-for="(tier, index) in cloneForm.price_tiers" :key="index">
+                        <td><input v-model.trim="tier.key" class="form-input" placeholder="例如 720P / default"></td>
+                        <td v-if="cloneSourceModel?.media_type === 'video'"><input v-model.number="tier.silent" type="number" min="0" step="0.01" class="form-input" placeholder="0.30"></td>
+                        <td v-if="cloneSourceModel?.media_type === 'video'"><input v-model.number="tier.with_audio" type="number" min="0" step="0.01" class="form-input" placeholder="0.45"></td>
+                        <td v-else><input v-model.number="tier.value" type="number" min="0" step="0.01" class="form-input" placeholder="0.30"></td>
+                        <td><button type="button" class="pricing-remove-btn" @click="removeKeyValueRow(cloneForm.price_tiers, index)">删除</button></td>
+                      </tr>
+                      <tr v-if="cloneForm.price_tiers.length === 0"><td :colspan="cloneSourceModel?.media_type === 'video' ? 4 : 3" class="pricing-empty">留空则沿用源模型定价</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              <div class="form-group">
+                <div class="pricing-editor-header">
+                  <label class="form-label">分辨率候选上游 ID (resolution_variants)</label>
+                  <button type="button" class="pricing-add-btn" @click="addKeyValueRow(cloneForm.resolution_variants)">+ 添加映射</button>
+                </div>
+                <div class="pricing-table-wrap">
+                  <table class="pricing-table route-table">
+                    <thead><tr><th>标准分辨率</th><th>候选上游私有 ID（按顺序回退）</th><th>操作</th></tr></thead>
+                    <tbody>
+                      <tr v-for="(row, index) in cloneForm.resolution_variants" :key="index">
+                        <td><input v-model.trim="row.key" class="form-input" placeholder="例如 720P"></td>
+                        <td><input v-model="row.value" class="form-input" placeholder="主上游ID,备用上游ID"></td>
+                        <td><button type="button" class="pricing-remove-btn" @click="removeKeyValueRow(cloneForm.resolution_variants, index)">删除</button></td>
+                      </tr>
+                      <tr v-if="cloneForm.resolution_variants.length === 0"><td colspan="3" class="pricing-empty">留空表示清空候选上游 ID 映射</td></tr>
+                    </tbody>
+                  </table>
                 </div>
               </div>
               <div class="form-group">
@@ -1122,7 +1346,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import AppLayout from '../components/layout/AppLayout.vue'
 import { getAnnouncementsApi, createAnnouncementApi, updateAnnouncementApi, deleteAnnouncementApi } from '../api/announcement'
 import {
@@ -1509,6 +1733,9 @@ const modelEnabledFilter = ref('')
 const modelPage = ref(1)
 const modelPageSize = 10
 const showDeletedModels = ref(false) // 回收站视图开关
+const selectedModelIds = ref([])
+const isBatchDeletingModels = ref(false)
+const hydratedModelIds = new Set()
 
 // 克隆模型相关变量
 const showCloneModal = ref(false)
@@ -1518,11 +1745,108 @@ const cloneForm = ref({
   display_name: '',
   model_name: '',
   model_version: '',
-  price_per_request: null,
-  price_per_second: null,
   price_multiplier: null,
+  price_tiers: [],
+  resolution_variants: [],
   description: ''
 })
+
+function getVideoTierPrice(value, mode) {
+  if (value && typeof value === 'object') return value[mode] ?? '-'
+  return value ?? '-'
+}
+
+function formatPriceTiers(tiers, mediaType) {
+  return Object.entries(tiers).slice(0, 2).map(([key, value]) => {
+    if (mediaType === 'video') {
+      return `${key}: 静音 ${getVideoTierPrice(value, 'silent')} / 含音频 ${getVideoTierPrice(value, 'with_audio')}`
+    }
+    return `${key}: ${value}`
+  }).join(' · ')
+}
+
+function objectToRows(value) {
+  return Object.entries(value || {}).map(([key, rowValue]) => ({ key, value: rowValue }))
+}
+
+function addKeyValueRow(rows, limit = Infinity) {
+  if (rows.length < limit) rows.push({ key: '', value: null })
+}
+
+function addPriceTierRow(rows, mediaType) {
+  if (rows.length >= 32) return
+  rows.push(mediaType === 'video'
+    ? { key: '', silent: null, with_audio: null }
+    : { key: '', value: null })
+}
+
+function removeKeyValueRow(rows, index) {
+  rows.splice(index, 1)
+}
+
+function priceTierObjectToRows(value, mediaType) {
+  return Object.entries(value || {}).map(([key, tierValue]) => {
+    if (mediaType === 'video') {
+      const legacyValue = typeof tierValue === 'number' ? tierValue : null
+      return {
+        key,
+        silent: tierValue?.silent ?? legacyValue,
+        with_audio: tierValue?.with_audio ?? legacyValue
+      }
+    }
+    return { key, value: tierValue }
+  })
+}
+
+function priceTierRowsToObject(rows, mediaType) {
+  const tiers = {}
+  for (const row of rows) {
+    const key = String(row.key || '').trim()
+    if (!key) throw new Error('分级定价的键不能为空')
+    if (Object.hasOwn(tiers, key)) throw new Error(`分级定价存在重复键：${key}`)
+    if (mediaType === 'video') {
+      const silent = Number(row.silent)
+      const withAudio = Number(row.with_audio)
+      const silentInvalid = row.silent === '' || row.silent === null || row.silent === undefined || !Number.isFinite(silent) || silent < 0
+      const audioInvalid = row.with_audio === '' || row.with_audio === null || row.with_audio === undefined || !Number.isFinite(withAudio) || withAudio < 0
+      if (silentInvalid || audioInvalid) {
+        throw new Error(`视频价格档 ${key} 必须同时填写大于等于 0 的静音和含音频单价`)
+      }
+      tiers[key] = { silent, with_audio: withAudio }
+    } else {
+      const value = Number(row.value)
+      if (row.value === '' || row.value === null || row.value === undefined || !Number.isFinite(value) || value < 0) {
+        throw new Error(`价格档 ${key} 的单价必须是大于等于 0 的数字`)
+      }
+      tiers[key] = value
+    }
+  }
+  return tiers
+}
+
+function routeRowsToObject(rows) {
+  const routes = {}
+  for (const row of rows) {
+    const key = String(row.key || '').trim()
+    const value = String(row.value || '').trim()
+    if (!key || !value) throw new Error('上游 ID 路由的键和值都不能为空')
+    if (Object.hasOwn(routes, key)) throw new Error(`上游 ID 路由存在重复键：${key}`)
+    routes[key] = value
+  }
+  return routes
+}
+
+function resolutionVariantRowsToObject(rows) {
+  const mappings = {}
+  for (const row of rows) {
+    const key = String(row.key || '').trim()
+    const variants = String(row.value || '').split(',').map(value => value.trim()).filter(Boolean)
+    if (!key || variants.length === 0) throw new Error('分辨率候选上游 ID 的标准分辨率和候选 ID 都不能为空')
+    if (Object.hasOwn(mappings, key)) throw new Error(`分辨率候选上游 ID 存在重复标准分辨率：${key}`)
+    mappings[key] = [...new Set(variants)]
+  }
+  return mappings
+}
 
 function getModelStatusClass(s) {
   if (s === 'active') return 'status-active'
@@ -1580,8 +1904,102 @@ const pagedModels = computed(() => {
   const start = (modelPage.value - 1) * modelPageSize
   return filteredModels.value.slice(start, start + modelPageSize)
 })
+const filteredModelIds = computed(() => filteredModels.value.map(model => model.model_id))
+const areAllFilteredModelsSelected = computed(() =>
+  filteredModelIds.value.length > 0 && filteredModelIds.value.every(id => selectedModelIds.value.includes(id))
+)
+const areSomeFilteredModelsSelected = computed(() =>
+  !areAllFilteredModelsSelected.value && filteredModelIds.value.some(id => selectedModelIds.value.includes(id))
+)
 
-async function fetchModels() {
+function toggleModelSelection(modelId) {
+  if (selectedModelIds.value.includes(modelId)) {
+    selectedModelIds.value = selectedModelIds.value.filter(id => id !== modelId)
+  } else {
+    selectedModelIds.value = [...selectedModelIds.value, modelId]
+  }
+}
+
+function toggleAllFilteredModels() {
+  const filteredIds = filteredModelIds.value
+  if (areAllFilteredModelsSelected.value) {
+    const filteredSet = new Set(filteredIds)
+    selectedModelIds.value = selectedModelIds.value.filter(id => !filteredSet.has(id))
+  } else {
+    selectedModelIds.value = [...new Set([...selectedModelIds.value, ...filteredIds])]
+  }
+}
+
+async function batchDeleteModels() {
+  const selectedSet = new Set(selectedModelIds.value)
+  const targets = modelList.value.filter(model => selectedSet.has(model.model_id))
+  if (targets.length === 0 || isBatchDeletingModels.value) return
+
+  const hardDeleteCount = targets.filter(model => model.deleted_at).length
+  const softDeleteCount = targets.length - hardDeleteCount
+  const detail = [
+    softDeleteCount ? `${softDeleteCount} 个模型将移入回收站` : '',
+    hardDeleteCount ? `${hardDeleteCount} 个回收站模型将永久删除且无法恢复` : ''
+  ].filter(Boolean).join('\n')
+  if (!confirm(`确定批量删除选中的 ${targets.length} 个模型吗？\n\n${detail}`)) return
+
+  isBatchDeletingModels.value = true
+  try {
+    const results = await Promise.allSettled(targets.map(model =>
+      deleteAdminModelApi(model.model_id, { force: !!model.deleted_at })
+    ))
+    const failed = results
+      .map((result, index) => ({ result, model: targets[index] }))
+      .filter(item => item.result.status === 'rejected')
+
+    targets.forEach((model, index) => {
+      if (results[index].status === 'fulfilled') {
+        addLog('delete', model.deleted_at ? `硬删模型「${model.display_name}」` : `软删模型「${model.display_name}」`, `模型#${model.model_id}`)
+      }
+    })
+    selectedModelIds.value = failed.map(item => item.model.model_id)
+    await fetchModels({ preserveSelection: failed.length > 0 })
+
+    if (failed.length > 0) {
+      const failedNames = failed.map(item => item.model.display_name || item.model.model_id).join('、')
+      alert(`已删除 ${targets.length - failed.length} 个模型，${failed.length} 个删除失败：${failedNames}`)
+    } else {
+      alert(`已成功删除 ${targets.length} 个模型`)
+    }
+  } finally {
+    isBatchDeletingModels.value = false
+  }
+}
+
+async function hydrateVisibleModels() {
+  const pendingModels = pagedModels.value.filter(model => {
+    const hasPricing = model.price_tiers && Object.keys(model.price_tiers).length > 0
+    return !hasPricing && !hydratedModelIds.has(model.model_id)
+  })
+  pendingModels.forEach(model => { model._pricingLoading = true })
+
+  await Promise.all(pendingModels.map(async model => {
+    hydratedModelIds.add(model.model_id)
+    try {
+      const res = await getAdminModelDetailApi(model.model_id)
+      if (isUnmounted.value) return
+      const body = res.data
+      const detail = (body && body.code !== undefined && body.data !== undefined) ? body.data : body
+      Object.assign(model, detail)
+    } catch (e) {
+      console.error(`补充模型 ${model.model_id} 列表详情失败:`, e)
+    } finally {
+      model._pricingLoading = false
+    }
+  }))
+}
+
+watch(
+  () => pagedModels.value.map(model => model.model_id).join('|'),
+  () => { hydrateVisibleModels() }
+)
+
+async function fetchModels(options = {}) {
   try {
     const res = await getAdminModelsApi({
       limit: 1000,
@@ -1592,11 +2010,19 @@ async function fetchModels() {
     const body = res.data
     const data = (body && body.code !== undefined && body.data !== undefined) ? body.data : body
     const items = data.items || []
+    hydratedModelIds.clear()
     // 确保每条数据都有media_type字段，用于筛选
     modelList.value = items.map(m => ({
       ...m,
       media_type: m.media_type || (m.type || null)
     }))
+    if (!options.preserveSelection) selectedModelIds.value = []
+    else {
+      const availableIds = new Set(modelList.value.map(model => model.model_id))
+      selectedModelIds.value = selectedModelIds.value.filter(id => availableIds.has(id))
+    }
+    await nextTick()
+    hydrateVisibleModels()
     // 调试日志：输出各类型的模型数量
     const typeCount = {}
     modelList.value.forEach(m => { typeCount[m.media_type] = (typeCount[m.media_type] || 0) + 1 })
@@ -1610,6 +2036,7 @@ async function fetchModels() {
 // 回收站视图切换
 function toggleDeletedView() {
   modelPage.value = 1 // 重置页码
+  selectedModelIds.value = []
   fetchModels()
 }
 
@@ -1617,37 +2044,103 @@ function toggleDeletedView() {
 const showModelModal = ref(false)
 const editingModel = ref(null)
 const defaultModelForm = () => ({
-  model_id: '', model_name: '', model_version: '', display_name: '',
+  model_id: '', business_model_id: '', model_name: '', model_version: '', display_name: '',
   vendor: 'vendor_a', vendor_display_name: '', media_type: 'image',
+  upstream_model_id: '', endpoint: '', endpoint_2: '', generation_type: 'text_to_image',
+  upstream_id_by_resolution: [{ key: 'default', value: '' }],
+  resolution_variants: [],
   supported_features: [],
   supported_resolutions_text: '',
   supported_aspect_ratios_text: '',
+  supported_durations_text: '',
   sound_mode: null, ui_features: [],
   max_width: null, max_height: null, min_width: null, min_height: null,
   max_duration: null, max_fps: null,
-  price_per_request: null, price_per_second: null, price_multiplier: 1.00,
-  currency: 'CNY', price_tiers_text: '',
+  max_reference_images: null, max_reference_videos: null, max_reference_audios: null,
+  requires_input: null, input_materials: { image: 0, video: 0, audio: 0 }, supports_audio: false,
+  price_multiplier: 1.00,
+  currency: 'CNY', price_tiers: [{ key: 'default', value: null }],
   status: 'active', is_enabled: true,
   availability_region: '', description: '', tagsText: ''
 })
 const modelForm = ref(defaultModelForm())
 
-function openModelModal(model) {
-  editingModel.value = model || null
-  if (model) {
-    modelForm.value = {
-      ...defaultModelForm(),
-      ...model,
-      supported_features: [...(model.supported_features || [])],
-      sound_mode: model.sound_mode || null,
-      ui_features: [...(model.ui_features || [])],
-      supported_resolutions_text: (model.supported_resolutions || []).join(','),
-      supported_aspect_ratios_text: (model.supported_aspect_ratios || []).join(','),
-      tagsText: (model.tags || []).join(','),
-      price_tiers_text: model.price_tiers ? JSON.stringify(model.price_tiers, null, 2) : ''
+function fillModelForm(model) {
+  const mediaType = model.media_type || model.type || 'image'
+  const soundMode = mediaType === 'video'
+    ? (model.sound_mode || (model.supports_audio === true ? 'free' : 'disabled-silent'))
+    : null
+  modelForm.value = {
+    ...defaultModelForm(),
+    ...model,
+    media_type: mediaType,
+    supported_features: [...(model.supported_features || [])],
+    sound_mode: soundMode,
+    supports_audio: soundMode === 'free',
+    ui_features: [...(model.ui_features || [])],
+    supported_resolutions_text: (model.supported_resolutions || []).join(','),
+    supported_aspect_ratios_text: (model.supported_aspect_ratios || []).join(','),
+    supported_durations_text: (model.supported_durations || []).join(','),
+    tagsText: (model.tags || []).join(','),
+    price_tiers: priceTierObjectToRows(model.price_tiers, mediaType),
+    upstream_id_by_resolution: objectToRows(model.upstream_id_by_resolution),
+    resolution_variants: Object.entries(model.resolution_variants || {}).map(([key, variants]) => ({
+      key,
+      value: Array.isArray(variants) ? variants.join(',') : String(variants || '')
+    })),
+    input_materials: {
+      image: Number(model.input_materials?.image) || 0,
+      video: Number(model.input_materials?.video) || 0,
+      audio: Number(model.input_materials?.audio) || 0
     }
+  }
+}
+
+function handleModelMediaTypeChange() {
+  if (modelForm.value.media_type === 'video') {
+    modelForm.value.sound_mode ||= 'disabled-silent'
+    modelForm.value.supports_audio = modelForm.value.sound_mode === 'free'
   } else {
+    modelForm.value.sound_mode = null
+    modelForm.value.supports_audio = false
+  }
+}
+
+function handleSoundModeChange() {
+  modelForm.value.supports_audio = modelForm.value.media_type === 'video' && modelForm.value.sound_mode === 'free'
+}
+
+function handleSupportsAudioChange() {
+  if (modelForm.value.media_type !== 'video') {
+    modelForm.value.supports_audio = false
+    modelForm.value.sound_mode = null
+    return
+  }
+  modelForm.value.sound_mode = modelForm.value.supports_audio ? 'free' : 'disabled-silent'
+}
+
+async function openModelModal(model) {
+  if (!model) {
+    editingModel.value = null
     modelForm.value = defaultModelForm()
+  } else {
+    try {
+      const res = await getAdminModelDetailApi(model.model_id)
+      if (isUnmounted.value) return
+      const body = res.data
+      const detailData = (body && body.code !== undefined && body.data !== undefined) ? body.data : body
+      const detail = {
+        ...model,
+        ...detailData,
+        media_type: detailData.media_type || detailData.type || model.media_type || model.type || null
+      }
+      editingModel.value = detail
+      fillModelForm(detail)
+    } catch (e) {
+      console.error('获取模型编辑数据失败:', e)
+      alert('获取模型编辑数据失败：' + (e.response?.data?.detail?.message || e.message))
+      return
+    }
   }
   showModelModal.value = true
   nextTick(() => { if (window.lucide) lucide.createIcons() })
@@ -1661,7 +2154,8 @@ function closeModelModal() {
 function buildModelPayload() {
   const f = modelForm.value
   const payload = {
-    model_id: f.model_id,
+    model_id: editingModel.value?.model_id || f.business_model_id.trim(),
+    business_model_id: f.business_model_id,
     model_name: f.model_name,
     model_version: f.model_version,
     display_name: f.display_name,
@@ -1670,6 +2164,11 @@ function buildModelPayload() {
     status: f.status,
     is_enabled: !!f.is_enabled
   }
+  if (f.generation_type) payload.generation_type = f.generation_type
+  if (f.upstream_model_id) payload.upstream_model_id = f.upstream_model_id
+  const endpoint = f.endpoint?.trim()
+  if (endpoint) payload.endpoint = endpoint
+  payload.endpoint_2 = f.endpoint_2 || ''
   if (f.vendor_display_name) payload.vendor_display_name = f.vendor_display_name
   if (f.availability_region) payload.availability_region = f.availability_region
   if (f.description) payload.description = f.description
@@ -1680,48 +2179,42 @@ function buildModelPayload() {
   // supported_features 允许为空数组（清空所有支持功能），始终发送
   payload.supported_features = [...(f.supported_features || [])]
   // sound_mode 允许为 null（非视频模型），始终发送以便清空
-  payload.sound_mode = f.sound_mode
+  payload.sound_mode = f.media_type === 'video' ? (f.sound_mode || 'disabled-silent') : null
   // ui_features 允许为空数组（清空所有特色功能），始终发送
   payload.ui_features = [...(f.ui_features || [])]
-  if (f.supported_resolutions_text && f.supported_resolutions_text.trim()) {
-    payload.supported_resolutions = f.supported_resolutions_text.split(',').map(s => s.trim()).filter(Boolean)
-  }
-  if (f.supported_aspect_ratios_text && f.supported_aspect_ratios_text.trim()) {
-    payload.supported_aspect_ratios = f.supported_aspect_ratios_text.split(',').map(s => s.trim()).filter(Boolean)
-  }
+  payload.supported_resolutions = f.supported_resolutions_text.split(',').map(s => s.trim()).filter(Boolean)
+  payload.supported_aspect_ratios = f.supported_aspect_ratios_text.split(',').map(s => s.trim()).filter(Boolean)
+  payload.supported_durations = f.supported_durations_text.split(',').map(s => Number(s.trim())).filter(n => Number.isInteger(n) && n > 0)
   if (f.tagsText && f.tagsText.trim()) {
     payload.tags = f.tagsText.split(',').map(s => s.trim()).filter(Boolean)
   }
 
   // 数值字段 - 只在有有效值时才添加
-  ;['max_width', 'max_height', 'min_width', 'min_height', 'max_duration', 'max_fps'].forEach(k => {
+  ;['max_width', 'max_height', 'min_width', 'min_height', 'max_duration', 'max_fps', 'max_reference_images', 'max_reference_videos', 'max_reference_audios'].forEach(k => {
     const val = Number(f[k])
     if (f[k] !== null && f[k] !== '' && f[k] !== undefined && !isNaN(val)) {
       payload[k] = val
     }
   })
 
-  // 定价
-  const pricePerRequest = Number(f.price_per_request)
-  if (f.price_per_request !== null && f.price_per_request !== '' && f.price_per_request !== undefined && !isNaN(pricePerRequest)) {
-    payload.price_per_request = pricePerRequest
-  }
-  const pricePerSecond = Number(f.price_per_second)
-  if (f.price_per_second !== null && f.price_per_second !== '' && f.price_per_second !== undefined && !isNaN(pricePerSecond)) {
-    payload.price_per_second = pricePerSecond
-  }
+  payload.requires_input = f.requires_input
+  payload.supports_audio = f.media_type === 'video' && payload.sound_mode === 'free'
 
-  // price_tiers
-  if (f.price_tiers_text && f.price_tiers_text.trim()) {
-    try {
-      const parsed = JSON.parse(f.price_tiers_text)
-      if (typeof parsed === 'object' && parsed !== null && Object.keys(parsed).length > 0) {
-        payload.price_tiers = parsed
-      }
-    } catch (e) {
-      throw new Error('分级定价 JSON 格式错误：' + e.message)
+  const inputMaterials = {}
+  for (const key of ['image', 'video', 'audio']) {
+    const value = Number(f.input_materials?.[key] ?? 0)
+    if (!Number.isInteger(value) || value < 0) {
+      throw new Error('输入素材配额必须是大于或等于 0 的整数')
     }
+    inputMaterials[key] = value
   }
+  payload.input_materials = inputMaterials
+
+  payload.upstream_id_by_resolution = routeRowsToObject(f.upstream_id_by_resolution)
+
+  payload.resolution_variants = resolutionVariantRowsToObject(f.resolution_variants)
+
+  payload.price_tiers = priceTierRowsToObject(f.price_tiers, f.media_type)
 
   return payload
 }
@@ -1729,14 +2222,37 @@ function buildModelPayload() {
 async function submitModel() {
   // 必填校验
   const f = modelForm.value
-  if (!f.model_id || !f.model_name || !f.model_version || !f.display_name || !f.vendor || !f.media_type) {
-    alert('请填写所有必填字段（model_id / model_name / model_version / display_name / vendor / media_type）')
+  const endpointRequired = f.vendor !== 'vendor_a'
+  if (!f.business_model_id?.trim() || !f.model_name || !f.model_version || !f.display_name || !f.vendor || !f.media_type || (endpointRequired && !f.endpoint?.trim())) {
+    alert(`请填写所有必填字段（business_model_id / model_name / model_version / display_name / vendor / media_type${endpointRequired ? ' / endpoint' : ''}）`)
     return
   }
 
   let payload
   try {
     payload = buildModelPayload()
+    const invalidRoute = Object.entries(payload.upstream_id_by_resolution).some(([key, value]) => !key.trim() || typeof value !== 'string' || !value.trim())
+    if (invalidRoute) {
+      alert('上游 ID 路由的键和值都必须是非空字符串')
+      return
+    }
+    const tierEntries = Object.entries(payload.price_tiers)
+    if (tierEntries.length > 32) {
+      alert('分级定价最多 32 档')
+      return
+    }
+    if (!editingModel.value && Object.keys(payload.upstream_id_by_resolution).length === 0) {
+      alert('创建模型时，上游 ID 路由不能为空')
+      return
+    }
+    if (!editingModel.value && Object.keys(payload.price_tiers).length === 0) {
+      alert('创建模型时，分级定价不能为空')
+      return
+    }
+    if (!editingModel.value && f.media_type === 'video' && payload.supported_durations.length === 0) {
+      alert('创建视频模型时，请填写支持时长')
+      return
+    }
   } catch (e) {
     alert(e.message)
     return
@@ -1745,12 +2261,12 @@ async function submitModel() {
   try {
     if (editingModel.value) {
       // PATCH：构建增量更新数据，只包含有意义的字段
-      const { model_id, ...patchData } = payload
+      const { model_id, vendor, media_type, ...patchData } = payload
       // 移除值为null、undefined、空字符串的可选字段，避免422验证错误
       // 注意：sound_mode 允许为 null（非视频模型），需要保留以便清空
       const cleanPatchData = {}
       for (const [key, value] of Object.entries(patchData)) {
-        if (key === 'sound_mode') {
+        if (key === 'sound_mode' || key === 'requires_input' || key === 'endpoint_2') {
           cleanPatchData[key] = value
         } else if (value !== null && value !== undefined && value !== '') {
           cleanPatchData[key] = value
@@ -1759,45 +2275,15 @@ async function submitModel() {
       await updateAdminModelApi(editingModel.value.model_id, cleanPatchData)
       addLog('update', `修改模型「${f.display_name}」`, `模型#${editingModel.value.model_id}`)
     } else {
-      // 新增模型：检查是否已存在同名模型
-      const existingSameId = modelList.value.find(m => m.model_id === f.model_id)
+      // model_id 由 business_model_id 自动生成，创建前检查是否已存在。
+      const existingSameId = modelList.value.find(m => m.model_id === payload.model_id)
       if (existingSameId) {
-        const typeLabel = { image: '图片', video: '视频', audio: '音频' }
         if (existingSameId.media_type === f.media_type) {
-          // 同名同类型：提示是否覆盖更新
-          const confirmMsg = `模型ID「${f.model_id}」已存在（类型：${f.media_type}）。\n\n是否覆盖更新该模型的配置？`
+          const confirmMsg = `业务模型ID「${f.business_model_id}」已存在。\n\n是否覆盖更新该模型的配置？`
           if (!confirm(confirmMsg)) return
         } else {
-          // 同名不同类型：使用带后缀的ID存储，保持原始ID用于API调用
-          const currentTypeLabel = typeLabel[f.media_type] || f.media_type
-          const existingTypeLabel = typeLabel[existingSameId.media_type] || existingSameId.media_type
-          const suffixMap = { image: '__img', video: '__vid', audio: '__aud' }
-          const suffix = suffixMap[f.media_type] || `__${f.media_type}`
-          const newModelId = f.model_id + suffix
-          const suggestedDisplayName = `${f.display_name.replace(/\s*\([^)]*\)$/, '')} (${currentTypeLabel})`
-
-          const confirmMsg =
-            `═══ 模型多类型支持 ═══\n\n` +
-            `模型ID「${f.model_id}」已被「${existingTypeLabel}」类型占用。\n\n` +
-            `【系统处理】\n` +
-            `• 存储ID自动改为：「${newModelId}」（满足数据库唯一约束）\n` +
-            `• API调用ID保持为：「${f.model_id}」（确保后端能识别）\n` +
-            `• 展示名改为：「${suggestedDisplayName}」\n\n` +
-            `【效果】\n` +
-            `• 前端列表会显示两条独立记录（图片/视频）\n` +
-            `• 生成时自动使用正确的API ID\n` +
-            `• 定价/特性可独立配置\n\n` +
-            `是否确认创建？`
-
-          if (!confirm(confirmMsg)) return
-
-          // 应用新的存储ID和展示名
-          payload.model_id = newModelId
-          f.model_id = newModelId
-          payload.display_name = suggestedDisplayName
-          f.display_name = suggestedDisplayName
-          // 在描述中标记原始API ID，用于GenerateView映射
-          payload.description = `[api_model_id:${f.model_id.replace(suffix, '')}] ${f.description || ''}`
+          alert(`业务模型ID「${f.business_model_id}」已被其他模型类型使用，请填写新的业务模型ID`)
+          return
         }
       }
       await createAdminModelApi(payload)
@@ -1935,9 +2421,12 @@ function openCloneModal(m) {
     display_name: `${m.display_name} (克隆)`,
     model_name: m.model_name,
     model_version: m.model_version,
-    price_per_request: m.price_per_request,
-    price_per_second: m.price_per_second,
     price_multiplier: m.price_multiplier,
+    price_tiers: priceTierObjectToRows(m.price_tiers, m.media_type),
+    resolution_variants: Object.entries(m.resolution_variants || {}).map(([key, variants]) => ({
+      key,
+      value: Array.isArray(variants) ? variants.join(',') : String(variants || '')
+    })),
     description: m.description
   }
   showCloneModal.value = true
@@ -1967,9 +2456,9 @@ async function submitClone() {
     if (cloneForm.value.display_name) payload.display_name = cloneForm.value.display_name
     if (cloneForm.value.model_name) payload.model_name = cloneForm.value.model_name
     if (cloneForm.value.model_version) payload.model_version = cloneForm.value.model_version
-    if (cloneForm.value.price_per_request != null) payload.price_per_request = cloneForm.value.price_per_request
-    if (cloneForm.value.price_per_second != null) payload.price_per_second = cloneForm.value.price_per_second
     if (cloneForm.value.price_multiplier != null) payload.price_multiplier = cloneForm.value.price_multiplier
+    if (cloneForm.value.price_tiers.length) payload.price_tiers = priceTierRowsToObject(cloneForm.value.price_tiers, cloneSourceModel.value.media_type)
+    payload.resolution_variants = resolutionVariantRowsToObject(cloneForm.value.resolution_variants)
     if (cloneForm.value.description) payload.description = cloneForm.value.description
 
     const res = await cloneAdminModelApi(cloneSourceModel.value.model_id, payload)
@@ -2060,10 +2549,14 @@ async function viewModelChangelog(m) {
 // ----- 同步 JSON -----
 // ----- 搜索/筛选调试 -----
 function onModelSearchChange() {
+  modelPage.value = 1
+  selectedModelIds.value = []
   console.log('[模型搜索] 输入:', modelSearch.value, '| 过滤结果:', filteredModels.value.length)
 }
 
 function onModelFilterChange(type, event) {
+  modelPage.value = 1
+  selectedModelIds.value = []
   const value = event.target.value
   console.log(`[模型筛选] ${type} =`, value,
     '| 厂商:', modelVendorFilter.value,
@@ -2425,7 +2918,44 @@ onUnmounted(() => {
 .ms-purple { color: #8b5cf6; }
 .ms-amber { color: #f59e0b; }
 
+.model-table-wrap {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+}
+.model-list-toolbar { align-items: flex-start; }
+.model-list-toolbar .table-title { flex: 0 0 100%; margin-bottom: 0; }
+.model-list-toolbar-actions { width: 100%; display: grid; grid-template-columns: minmax(220px, 1.6fr) repeat(4, minmax(110px, 0.8fr)) auto auto auto auto; gap: 12px; }
+.model-list-toolbar-actions .search-wrap-member { width: auto; min-width: 0; }
+.model-list-toolbar-actions .filter-select-member { width: 100%; min-width: 0; }
+.model-list-toolbar-actions .checkbox-wrap,
+.model-list-toolbar-actions .model-batch-delete-btn,
+.model-list-toolbar-actions .export-btn,
+.model-list-toolbar-actions .btn-add-new { margin: 0 !important; justify-content: center; white-space: nowrap; }
+.model-list-toolbar-actions .btn-add-new { justify-self: end; }
+@media (max-width: 1280px) {
+  .model-list-toolbar-actions { grid-template-columns: minmax(220px, 1fr) repeat(3, minmax(110px, 0.7fr)); }
+  .model-list-toolbar-actions .btn-add-new { grid-column: -2 / -1; }
+}
+.model-table { min-width: 1180px; }
 .model-table th, .model-table td { font-size: 12.5px; }
+.model-select-cell { width: 38px; min-width: 38px; text-align: center; }
+.model-select-cell input { width: 15px; height: 15px; cursor: pointer; accent-color: #4f46e5; }
+.model-batch-delete-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 34px; padding: 0 12px; border: 1px solid #fecaca; border-radius: 8px;
+  background: #fff1f2; color: #dc2626; font-size: 12px; font-weight: 650; cursor: pointer;
+}
+.model-batch-delete-btn:hover:not(:disabled) { background: #ffe4e6; border-color: #fca5a5; }
+.model-batch-delete-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.model-table .mono-text {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.model-table .action-buttons {
+  min-width: 150px;
+  flex-wrap: wrap;
+}
 .model-name-cell { display: flex; flex-direction: column; gap: 3px; }
 .model-tags-mini { display: flex; gap: 4px; flex-wrap: wrap; }
 .tag-mini {
@@ -2468,6 +2998,34 @@ onUnmounted(() => {
 .price-tiers-mini {
   font-size: 10.5px; color: #6b7280; margin-top: 2px;
 }
+
+.pricing-editor-header {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px;
+}
+.pricing-editor-header .form-label { margin-bottom: 0; }
+.pricing-table-wrap {
+  overflow-x: auto; border: 1.5px solid #e5e7eb; border-radius: 10px; background: white;
+}
+.pricing-table { width: 100%; border-collapse: collapse; }
+.pricing-table th, .pricing-table td {
+  padding: 9px 10px; text-align: left; border-bottom: 1px solid #eef2f7; font-size: 12.5px;
+}
+.pricing-table th { color: #6b7280; background: #f8fafc; font-weight: 650; }
+.pricing-table tr:last-child td { border-bottom: 0; }
+.pricing-table th:last-child, .pricing-table td:last-child { width: 72px; text-align: center; }
+.pricing-table .form-input { min-width: 140px; padding: 8px 10px; }
+.pricing-add-btn, .pricing-remove-btn {
+  border: 0; border-radius: 7px; cursor: pointer; font-size: 12px; font-weight: 600;
+}
+.pricing-add-btn { padding: 7px 11px; color: #2563eb; background: #eff6ff; }
+.pricing-add-btn:hover { background: #dbeafe; }
+.pricing-remove-btn { padding: 6px 9px; color: #dc2626; background: #fef2f2; }
+.pricing-remove-btn:hover { background: #fee2e2; }
+.pricing-empty { padding: 18px !important; text-align: center !important; color: #9ca3af; }
+.pricing-detail-item { align-items: stretch; }
+.detail-pricing-table { flex: 1; }
+.detail-pricing-table .pricing-table th:last-child,
+.detail-pricing-table .pricing-table td:last-child { width: auto; text-align: left; }
 
 .empty-row {
   text-align: center; padding: 32px 12px !important; color: #9ca3af; font-size: 13px;

@@ -3,6 +3,20 @@
 > 涵盖 **vendor_b (Token Switch)** 下所有图片生成相关的接口与参数,包括文生图、图生图、多图参考、GPT 图像模型编辑、千问/万象等。
 > vendor_a (腾讯云) 的图生图请参见 [IMAGE_TO_VIDEO_GUIDE.md](IMAGE_TO_VIDEO_GUIDE.md) (含图生视频入口) 以及 vendor_a.py 的图生图逻辑。
 
+> ## 📌 PR-4.9（2026-08-12）：模型 ID 三层语义
+>
+> 后端现在区分三种模型标识：
+>
+> | 标识 | 含义 | 示例 |
+> |---|---|---|
+> | `business_model_id`（业务 ID） | 前端永远见到的稳定 ID | `gpt_image_2_tokenswitch` |
+> | `upstream_model_id`（上游 ID） | 实际调上游 API 的私有 ID | `gp-im-2` |
+> | `display_name`（展示名） | 前端展示名，写入 DB | `gpt image 2` |
+>
+> **前端调用规则**：请求 `model` 字段继续填业务 ID（如 `gpt_image_2_tokenswitch`），后端会自动解析成上游 ID 调 token switch。后端在响应中（账单流水、任务详情、素材库）的 `model` 相关字段返回的是 **`display_name`**（展示名），可直接展示给用户。
+>
+> 详见 [BILLING_API.md](BILLING_API.md) 和 [MEDIA_LIBRARY_API.md](MEDIA_LIBRARY_API.md) 顶部的 PR-4.9 说明。
+
 ---
 
 ## 0. 总览
@@ -13,6 +27,8 @@
 | `dall-e-2` / `dall-e-3` | `openai-images-*` | OpenAI 旧风格 | ✅ | ✅ (单张) | ❌ | ❌ |
 | 千问 (qwen-vl-max 等) | `qwen_images:*` | Anthropic 风格 | ✅ | ✅ | ✅ | ❌ |
 | 万象 (wan2.1-t2i-turbo 等) | `wan_images:*` | Anthropic 风格 | ✅ | ✅ | ✅ | ❌ |
+
+> 📌 **音频能力(`supports_audio`)是视频模型的字段**,图片生成不涉及。前端应根据该字段决定是否显示"声音"开关。详见 [ADMIN_MODELS_API.md §2.4](ADMIN_MODELS_API.md)。
 
 ---
 

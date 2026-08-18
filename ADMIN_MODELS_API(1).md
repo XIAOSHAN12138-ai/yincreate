@@ -19,6 +19,17 @@
 > | 主要用途 | 前端下拉框 / 选模型 | 后台 CRUD / 改价 |
 > | 字段范围 | 公开字段 + 计算字段 | 全部字段（含配置 / 定价 / 启停）|
 
+> ## 📌 PR-4.10（2026-08-14）：`resolution_variants` 分辨率变体映射
+>
+> 新增可选字段 `resolution_variants: dict[str, list[str]]`，用于给**同一分辨率**配置多个候选上游私有 ID（vendor 路由时按顺序回退）。
+>
+> - **存储位置**：持久化到现有 `ai_models.api_params` JSONB 的 `resolution_variants` 键下，**未改 DB schema**
+> - **接口形态**：在 `CreateModelRequest` / `UpdateModelRequest` / `CloneModelRequest` 顶层独立接收，同时在 `GET` 响应顶层独立返回
+> - **数据语义**：`null` = 不更新 / 不设置；`{}` = 清空；非空 dict = 设置该映射
+> - **典型用途**：单分辨率多上游 fallback，例如 `{"720P": ["happyhorse-1.0-i2v-720p", "alt-720p-fallback"]}`
+>
+> 详见 §2.5 与 §4-§6 示例。
+
 ---
 
 ## 0. 权限
@@ -56,7 +67,7 @@
 | --- | --- | --- | --- |
 | `model_id` | string 1-100 | UNIQUE | 业务标识, 例如 `kling_3_0` / `happyhorse_1_0` |
 | `business_model_id` | string 1-64 | UNIQUE NOT NULL | **PR-4.6 必填, 前端输入** — 稳定业务 ID = `model_name + version`, 例如 `happyhorse_1_0` / `doubao_seedance_2_0_260128`。前端永远见, 永不变 |
-| **`upstream_id_by_resolution`** | **Dict[str, str]** | **NOT NULL DEFAULT `{}`** | **🆕 PR-4.6 必填** — **上游私有 ID 路由表** (分辨率/尺寸键 → 上游 ID 值)。多分辨率 happyhorse: `{"720P": "happyhorse-1.0-i2v-720p", "1080P": "happyhorse-1.0-i2v-1080p"}`;单上游 gpt-image-2: `{"all(默认值)": "gpt-image-2"}`。一行 = 一个模型, 上游 ID 全在这张路由表里 |
+| **`upstream_id_by_resolution`** | **Dict[str, str]** | **NOT NULL DEFAULT `{}`** | **🆕 PR-4.6 必填** — **上游私有 ID 路由表** (分辨率/尺寸键 → 上游 ID 值)。多分辨率 happyhorse: `{"720P": "happyhorse-1.0-i2v-720p", "1080P": "happyhorse-1.0-i2v-1080p"}`;单上游 gpt-image-2: `{"all": "gpt-image-2"}`。一行 = 一个模型, 上游 ID 全在这张路由表里 |
 | `model_name` | string 1-50 | - | 模型短名 (不含版本), 例如 `HappyHorse` / `Gemini` |
 | `model_version` | string 1-20 | - | 版本号, 例如 `1.0` / `2.5` / `260128` |
 | `display_name` | string 1-100 | - | 模型级展示名 (不含分辨率), 例如 `HappyHorse 1.0` |
@@ -98,28 +109,70 @@
 | `description` | text | NULL | 后台自由文本 |
 | `tags` | list[string] | NULL | 例如 `["高清", "快速"]` |
 
-### 2.3 `price_tiers` 格式（按分辨率分段定价, PR-4.6 唯一价格字段）
+### 2.3 `price_tiers` 格式（PR-4.11 二维：分辨率 × 音频模式）
+
+> 🆕 PR-4.11 把 `price_tiers` 从一维 dict 升级为二维 dict，支持**分辨率 × 音频模式**双维度定价。
+>
+> **video 媒体类型强制二维**（每个分辨率档必须显式列 `silent` 与 `with_audio`）；**image / audio 媒体类型仍允许一维**（size → price，向后兼容）。
+
+#### 2.3.1 Video 模型（二维，必填 silent + with_audio）
 
 ```json
 {
-  "720p":  0.30,
-  "1080p": 0.50,
-  "2K":    1.20,
-  "4K":    2.40,
-  "default": 0.30
+  "720P":  { "silent": 0.30, "with_audio": 0.45 },
+  "1080P": { "silent": 0.50, "with_audio": 0.75 },
+  "2K":    { "silent": 1.20, "with_audio": 1.50 },
+  "4K":    { "silent": 2.40, "with_audio": 3.00 },
+  "default": { "silent": 0.30, "with_audio": 0.45 }
 }
 ```
 
-- 键 = 分辨率字符串 (图: `'1024x1024'`; 视频: `'720P'`/`'1080P'`/`'2K'`/`'4K'`)
-- 值 = 单价 (**图像: 元/张; 视频: 元/秒**)
-- 特殊键 `'default'` 作为兜底 (找不到匹配键时返回)
-- 至多 32 个键
-- **必填** (PR-4.6 后): 创建时不允许为空 dict
-- `price_per_request` / `price_per_second` 单值字段已删除 (PR-4.6)
-- 与 `price_multiplier` 是**互补**关系:
-  - 最终单价 = `price_tiers[key] * price_multiplier`
+| 维度 | 键类型 | 说明 |
+| --- | --- | --- |
+| 一级键（分辨率） | `string` | 视频分辨率字符串，如 `'720P'` / `'1080P'` / `'2K'` / `'4K'` |
+| 二级键（音频模式） | `silent` / `with_audio` | 仅两态，不允许 `with_music` 等其他命名 |
+| 一级键 `default` | `dict` (二维) | 兜底档，建议覆盖所有 `supported_resolutions` |
+
+**校验规则**（缺一即 400 `INVALID_PRICE_TIERS`）：
+- 每个 resolution 必须同时含 `silent` 与 `with_audio` 两个键
+- 不允许任何额外键（`with_music`、`silent_video` 等历史命名都不接受）
+- 值必须为非负数字
+- 至多 32 个一级键
+
+**查找优先级**（`compute_price` 二维走查）：
+1. `tiers[resolution][audio_mode]` ← 精确命中
+2. `tiers[resolution]['silent']` ← resolution 命中但 mode 缺（**唯一**隐式回退）
+3. `tiers['default'][audio_mode]` ← resolution 兜底
+4. `tiers['default']['silent']` ← 双兜底
+
+#### 2.3.2 Image / Audio 模型（一维，向后兼容）
+
+```json
+{
+  "1024x1024": 0.10,
+  "2048x2048": 0.20,
+  "default": 0.10
+}
+```
+
+- 键 = 输出尺寸字符串（OpenAI style `'1024x1024'` / `'2048x2048'`）
+- 值 = 单价（元/张）
+- 不涉及音频维度，仍是一维结构
+
+#### 2.3.3 价格计算
+
+最终单价 = `price_tiers[res][mode] * price_multiplier`
+- image: `cost = unit_price * price_multiplier`（按次）
+- video: `cost = unit_price * duration_seconds * price_multiplier`（按时长）
+- audio: `cost = unit_price * price_multiplier`（按次）
 
 实际定价计算走 [`app/services/pricing_service.py`](../../app/services/pricing_service.py) 的 `compute_price()`。
+
+#### 2.3.4 数据迁移
+
+- 49 SQL（`49_ai_models_price_tiers_2d.sql`）把存量 video 模型的扁平 dict 转二维：`with_audio = silent × 1.5` 起步，运营可手动 PATCH 微调
+- 49 SQL 已幂等，可重复运行
+- 旧扁平结构在 `_resolve_tier_price_2d` 里有逃生口（一维 number → silent 兜底），49 SQL 没跑时不会全挂，但 audio 不区分
 
 ### 2.4 `supports_audio` 音频能力声明
 
@@ -177,6 +230,86 @@ UPDATE ai_models
 ```
 
 完整 migration 见 [`database/sql/schema/33_ai_models_supports_audio.sql`](../../database/sql/schema/33_ai_models_supports_audio.sql)。
+
+### 2.5 `resolution_variants` 分辨率变体映射（PR-4.10）
+
+> **新增**：单分辨率多上游私有 ID 候选列表。`dict[str, list[str]]`，
+> 键 = 分辨率/尺寸字符串（图：`'1024x1024'`；视频：`'720P'`/`'1080P'`），
+> 值 = 该分辨率下的上游私有 ID 候选列表（**vendor 路由时按列表顺序回退**）。
+
+**为什么需要**：单分辨率模型有时候会有多个上游私有 ID 等价实现（例如主供应商 ID + 备用 fallback ID），调度层需要按顺序尝试。`upstream_id_by_resolution` 只能存 1:1 映射，而 `resolution_variants` 是 1:N 的扩展。
+
+**字段位置**：
+
+- 请求体顶层独立字段：`CreateModelRequest.resolution_variants` / `UpdateModelRequest.resolution_variants` / `CloneModelRequest.resolution_variants`
+- 响应体顶层独立字段：`_row_to_response_dict` 会把 `api_params.resolution_variants` 提到顶层，前端读取方便
+- 存储位置：`ai_models.api_params` JSONB 的 `resolution_variants` 子键（**无新 DB 列**）
+
+**字段语义（统一）**：
+
+| 请求值 | 含义 | 副作用 |
+| --- | --- | --- |
+| `null`（字段未提供或显式 null） | 不动现有值 | 无 |
+| `{}` | 清空（删除 api_params.resolution_variants 键） | 该模型不再有变体映射 |
+| `{"720P": ["a", "b"]}` | 设置该映射 | api_params.resolution_variants = `{...}` |
+
+**校验规则**（DAO 内部静默丢弃非法项，不报错）：
+
+- 键必须为非空字符串
+- 值必须为 list；list 元素全部转 str；None 元素丢弃
+- 非 dict / 非 list 的整体值 → 当作空处理
+
+**示例：给 happyhorse_1_0 设置 720P 双候选**
+
+```bash
+curl -X PATCH http://localhost:8000/api/v1/admin/models/happyhorse_1_0 \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "resolution_variants": {
+      "720P": ["happyhorse-1.0-i2v-720p", "happyhorse-alt-720p"],
+      "1080P": ["happyhorse-1.0-i2v-1080p"]
+    }
+  }'
+```
+
+**示例：清空**
+
+```bash
+curl -X PATCH http://localhost:8000/api/v1/admin/models/happyhorse_1_0 \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"resolution_variants": {}}'
+```
+
+**响应示例**（GET 详情 / PATCH 后返回）：
+
+```json
+{
+  "model_id": "happyhorse_1_0",
+  "api_params": {
+    "endpoint": "openai_videos:/v1/videos",
+    "resolution_variants": {
+      "720P": ["happyhorse-1.0-i2v-720p", "happyhorse-alt-720p"],
+      "1080P": ["happyhorse-1.0-i2v-1080p"]
+    }
+  },
+  "resolution_variants": {
+    "720P": ["happyhorse-1.0-i2v-720p", "happyhorse-alt-720p"],
+    "1080P": ["happyhorse-1.0-i2v-1080p"]
+  },
+  ...
+}
+```
+
+> `resolution_variants` 同时在 `api_params` 子键和顶层出现，便于不同调用方读取。
+
+**Clone 行为**（`POST /api/v1/admin/models/{model_id}/clone`）：
+
+- 源模型 `api_params.resolution_variants` 自动复制到新模型
+- `CloneModelRequest.resolution_variants` 可覆盖；不传 = 用源值；`{}` = 清空；`{...}` = 设置
+
+**Changelog diff**（PR-4.10）：当 PATCH 改 `resolution_variants`，会在 `ai_model_changelog.changed_fields` 里写一条 `{"resolution_variants": {"old": {...}, "new": {...}}}`，方便审计与回滚。
 
 ---
 
@@ -296,7 +429,7 @@ curl -X POST http://localhost:8003/api/v1/admin/models \
 >   "vendor": "vendor_b",
 >   "media_type": "image",
 >   "upstream_id_by_resolution": {
->     "all(默认值)": "gpt-image-2"
+>     "all": "gpt-image-2"
 >   },
 >   "price_tiers": {
 >     "1024x1024": 0.20,
@@ -529,7 +662,7 @@ curl -X PATCH .../happyhorse_1_0 -d '{
 # 🆕 单上游模型 (gpt-image-2) 改兜底上游 ID
 curl -X PATCH .../gpt_image_2 -d '{
   "upstream_id_by_resolution": {
-    "all(默认值)": "gpt-image-2.1"
+    "all": "gpt-image-2.1"
   }
 }'
 

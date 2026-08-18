@@ -121,9 +121,9 @@ function mockTransactions(params = {}) {
       balance_before: parseFloat(balanceBefore.toFixed(2)),
       balance_after: parseFloat(runningBalance.toFixed(2)),
       related_task_id: t === 'consume' ? `task_${Date.now()}_${i}` : null,
-      related_model_id: t === 'consume' ? 'doubao-seedance-2-0-fast-260128' : null,
+      related_model_id: t === 'consume' ? '豆包 Seedance 2.0 Fast' : null,
       description: t === 'consume'
-        ? `生成消费 task=task_xxx model=doubao-seedance-2-0-fast-260128`
+        ? `生成消费 task=task_xxx model=豆包 Seedance 2.0 Fast`
         : (t === 'recharge' ? '管理员充值' : '退款'),
       created_at: new Date(Date.now() - i * 3600000).toISOString()
     })
@@ -158,12 +158,20 @@ function mockTaskDetail(taskId) {
     data: {
       task_id: taskId,
       account_id: getMockUser().user_id,
-      model_name: 'doubao-seedance-2-0-fast-260128',
+      model_id: '豆包 Seedance 2.0 Fast',
       status: 'completed',
       price_snapshot: 2.50,
       quota_used: 2.50,
       output_url: '',
-      created_at: new Date().toISOString()
+      created_at: new Date().toISOString(),
+      decoded_generation_params: {
+        model: '豆包 Seedance 2.0 Fast',
+        output_type: 'video',
+        feature: 'text_to_video',
+        ratio: '16:9',
+        resolution: '1080P',
+        duration: 5
+      }
     }
   }
 }
@@ -192,9 +200,16 @@ function mockEstimatePrice(params) {
   let cost
   if (params.output_type === 'video') {
     const duration = params.parameters?.duration || 5
-    const resMap = { '720P': 30, '1080P': 50, '2K': 120, '4K': 300 }
-    const base = resMap[params.parameters?.resolution] || 50
-    cost = base * duration / 10
+    const resolution = String(params.parameters?.resolution || '1080P').toUpperCase()
+    const resMap = {
+      '720P': { silent: 3, with_audio: 4.5 },
+      '1080P': { silent: 5, with_audio: 7.5 },
+      '2K': { silent: 12, with_audio: 18 },
+      '4K': { silent: 30, with_audio: 45 }
+    }
+    const mode = params.parameters?.with_audio === true ? 'with_audio' : 'silent'
+    const base = (resMap[resolution] || resMap['1080P'])[mode]
+    cost = base * duration
   } else if (params.output_type === 'image') {
     cost = 15
   } else {
@@ -242,7 +257,7 @@ function unwrap(res) {
  * 员工 → accounts 表，企业 → enterprises 表
  */
 export function getBillingQuotaApi() {
-  if (MOCK_ENABLED) return delay(200).then(() => mockQuota())
+  if (MOCK_ENABLED) return delay(200).then(() => mockQuota().data)
   return request.get('/api/v1/billing/quota').then(unwrap)
 }
 
@@ -251,7 +266,7 @@ export function getBillingQuotaApi() {
  * GET /api/v1/billing/accounts
  */
 export function getBillingAccountsApi() {
-  if (MOCK_ENABLED) return delay(200).then(() => mockAccounts())
+  if (MOCK_ENABLED) return delay(200).then(() => mockAccounts().data)
   return request.get('/api/v1/billing/accounts').then(unwrap)
 }
 
@@ -260,7 +275,7 @@ export function getBillingAccountsApi() {
  * GET /api/v1/billing/transactions?transaction_type=&page=1&page_size=20
  */
 export function getBillingTransactionsApi(params = {}) {
-  if (MOCK_ENABLED) return delay(200).then(() => mockTransactions(params))
+  if (MOCK_ENABLED) return delay(200).then(() => mockTransactions(params).data)
   return request.get('/api/v1/billing/transactions', { params }).then(unwrap)
 }
 
@@ -269,7 +284,7 @@ export function getBillingTransactionsApi(params = {}) {
  * GET /api/v1/billing/tasks?status=&page=1&page_size=20
  */
 export function getBillingTasksApi(params = {}) {
-  if (MOCK_ENABLED) return delay(200).then(() => mockTasks(params))
+  if (MOCK_ENABLED) return delay(200).then(() => mockTasks(params).data)
   return request.get('/api/v1/billing/tasks', { params }).then(unwrap)
 }
 
@@ -278,7 +293,7 @@ export function getBillingTasksApi(params = {}) {
  * GET /api/v1/billing/tasks/{task_id}
  */
 export function getBillingTaskDetailApi(taskId) {
-  if (MOCK_ENABLED) return delay(150).then(() => mockTaskDetail(taskId))
+  if (MOCK_ENABLED) return delay(150).then(() => mockTaskDetail(taskId).data)
   return request.get(`/api/v1/billing/tasks/${taskId}`).then(unwrap)
 }
 
@@ -287,7 +302,7 @@ export function getBillingTaskDetailApi(taskId) {
  * POST /api/v1/estimate-price
  */
 export function estimatePriceApi(params) {
-  if (MOCK_ENABLED) return delay(250).then(() => mockEstimatePrice(params))
+  if (MOCK_ENABLED) return delay(250).then(() => mockEstimatePrice(params).data)
   return request.post('/api/v1/estimate-price', params).then(unwrap)
 }
 
@@ -297,6 +312,6 @@ export function estimatePriceApi(params) {
  * 响应中 data.charge_info 包含本次扣费明细（仅在 status=completed 时存在）
  */
 export function getTaskChargeInfoApi(taskId) {
-  if (MOCK_ENABLED) return delay(150).then(() => mockTaskStatus(taskId))
+  if (MOCK_ENABLED) return delay(150).then(() => mockTaskStatus(taskId).data)
   return request.get(`/api/v1/tasks/${taskId}/status`).then(unwrap)
 }

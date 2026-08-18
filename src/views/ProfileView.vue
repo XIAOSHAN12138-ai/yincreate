@@ -113,7 +113,7 @@
                 <div class="tx-desc">{{ tx.description || formatTxDesc(tx) }}</div>
                 <div class="tx-meta">
                   <span class="tx-time">{{ formatTime(tx.created_at) }}</span>
-                  <span v-if="tx.related_model_id" class="tx-model-id">模型ID: {{ tx.related_model_id }}</span>
+                  <span v-if="tx.related_model_id" class="tx-model-id">模型: {{ tx.related_model_id }}</span>
                 </div>
               </div>
               <div class="tx-right">

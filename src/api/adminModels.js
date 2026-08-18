@@ -153,6 +153,32 @@ const mockModels = [
   }
 ]
 
+// 让本地 Mock 与 ADMIN_MODELS_API PR-4.10/4.11 字段保持一致。
+for (const model of mockModels) {
+  model.business_model_id ??= model.model_id.replaceAll('-', '_')
+  model.generation_type ??= model.supported_features?.[0] || 'text_to_image'
+  model.upstream_id_by_resolution ??= { default: model.model_id }
+  model.resolution_variants ??= {}
+  model.supported_durations ??= model.max_duration ? [model.max_duration] : []
+  model.supported_sizes ??= model.media_type === 'image' ? [...(model.supported_resolutions || [])] : []
+  model.max_reference_images ??= 0
+  model.max_reference_videos ??= 0
+  model.max_reference_audios ??= 0
+  model.requires_input ??= null
+  model.input_materials ??= { image: 0, video: 0, audio: 0 }
+  model.supports_audio ??= model.media_type === 'video' && model.sound_mode === 'free'
+  if (!model.price_tiers || Object.keys(model.price_tiers).length === 0) {
+    const fallbackPrice = model.price_per_second ?? model.price_per_request
+    model.price_tiers = fallbackPrice == null ? {} : { default: fallbackPrice }
+  }
+  if (model.media_type === 'video') {
+    model.price_tiers = Object.fromEntries(Object.entries(model.price_tiers).map(([resolution, tier]) => {
+      if (tier && typeof tier === 'object') return [resolution, tier]
+      return [resolution, { silent: tier, with_audio: Number(tier) * 1.5 }]
+    }))
+  }
+}
+
 const mockChangelogs = {}
 const mockUsageCache = {}
 
@@ -508,16 +534,25 @@ export function cloneAdminModelApi(modelId, data) {
       const cloned = {
         id: ++mockModelIdSeq,
         model_id: data.new_model_id,
+        business_model_id: data.business_model_id ?? data.new_model_id.replaceAll('-', '_'),
         model_name: data.model_name ?? source.model_name,
         model_version: data.model_version ?? source.model_version,
         display_name: data.display_name ?? source.display_name,
         vendor: source.vendor,
         vendor_display_name: data.vendor_display_name ?? source.vendor_display_name,
         media_type: source.media_type,
+        upstream_model_id: source.upstream_model_id,
+        upstream_id_by_resolution: source.upstream_id_by_resolution ? { ...source.upstream_id_by_resolution } : {},
+        resolution_variants: data.resolution_variants ?? (source.resolution_variants ? JSON.parse(JSON.stringify(source.resolution_variants)) : {}),
+        endpoint: source.endpoint,
+        endpoint_2: source.endpoint_2,
+        generation_type: source.generation_type,
         supported_features: source.supported_features ? [...source.supported_features] : null,
         ui_features: source.ui_features ? [...source.ui_features] : null,
         supported_resolutions: source.supported_resolutions ? [...source.supported_resolutions] : null,
         supported_aspect_ratios: source.supported_aspect_ratios ? [...source.supported_aspect_ratios] : null,
+        supported_durations: source.supported_durations ? [...source.supported_durations] : null,
+        supported_sizes: source.supported_sizes ? [...source.supported_sizes] : null,
         sound_mode: source.sound_mode ?? null,
         max_width: source.max_width,
         max_height: source.max_height,
@@ -525,11 +560,17 @@ export function cloneAdminModelApi(modelId, data) {
         min_height: source.min_height,
         max_duration: source.max_duration,
         max_fps: source.max_fps,
+        max_reference_images: source.max_reference_images,
+        max_reference_videos: source.max_reference_videos,
+        max_reference_audios: source.max_reference_audios,
+        requires_input: source.requires_input,
+        input_materials: source.input_materials ? { ...source.input_materials } : null,
+        supports_audio: source.supports_audio,
         price_per_request: data.price_per_request ?? source.price_per_request,
         price_per_second: data.price_per_second ?? source.price_per_second,
         price_multiplier: data.price_multiplier ?? source.price_multiplier,
         currency: data.currency ?? source.currency,
-        price_tiers: source.price_tiers ? JSON.parse(JSON.stringify(source.price_tiers)) : null,
+        price_tiers: data.price_tiers ?? (source.price_tiers ? JSON.parse(JSON.stringify(source.price_tiers)) : {}),
         availability_region: data.availability_region ?? source.availability_region,
         description: data.description ?? source.description,
         tags: data.tags ?? (source.tags ? [...source.tags] : null),

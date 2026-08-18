@@ -139,7 +139,7 @@
               <h4 class="file-name">{{ file.name }}</h4>
               <p class="file-meta">{{ file.date }}</p>
               <p class="file-size">{{ file.size }}</p>
-              <p v-if="file.generation_model" class="file-model-id">模型: {{ getModelDisplayName(file) }}</p>
+              <p v-if="file.model_display_name" class="file-model-id">模型: {{ file.model_display_name }}</p>
             </div>
           </div>
           <div v-if="currentPage >= totalPages" class="file-card file-upload" @click="triggerUpload">
@@ -262,7 +262,7 @@
               <h4 class="file-name">{{ file.name }}</h4>
               <p class="file-meta">{{ file.date }}</p>
               <p class="file-size">{{ file.size }}</p>
-              <p v-if="file.generation_model" class="file-model-id">模型: {{ getModelDisplayName(file) }}</p>
+              <p v-if="file.model_display_name" class="file-model-id">模型: {{ file.model_display_name }}</p>
             </div>
           </div>
         </div>
@@ -714,13 +714,9 @@ import {
   detectFormat
 } from '../api/media'
 import { downloadFile } from '../utils/download'
-import request from '../utils/request'
 
 const userStore = useUserStore()
 const canDelete = computed(() => userStore.user?.user_type === 'admin')
-
-// 模型 ID/name -> display_name 映射（用于资产卡片显示带版本号的模型名）
-const modelDisplayNameMap = ref({})
 
 const activeTab = ref('all')
 const activeView = ref('grid')
@@ -841,98 +837,6 @@ function handleFolderClick(idx, folderName) {
   
   currentPage.value = 1
   loadMediaList()
-}
-
-// 获取模型列表，建立 model_id / name -> 展示名(带版本号) 映射
-// 管理员优先用 admin 接口（字段更全：display_name / model_name / model_version），
-// 普通用户或 admin 接口失败时回退到公共接口（只有 id / name）
-async function loadModelDisplayNameMap() {
-  const map = {}
-  const isAdmin = userStore.user?.user_type === 'admin'
-
-  // 只有管理员才尝试 admin 接口（普通用户无权限，会返回 403）
-  if (isAdmin) {
-    try {
-      const { data } = await request.get('/api/v1/admin/models', { params: { limit: 300, include_deleted: true } })
-      if (isUnmounted.value) return
-      const items = data?.items || data?.data?.items || []
-      for (const m of items) {
-        let display = m.display_name
-        if (!display && m.model_name && m.model_version) {
-          display = `${m.model_name} ${m.model_version}`
-        }
-        if (!display) display = m.name
-        if (!display) continue
-        for (const keyField of ['model_id', 'id', 'name', 'model_name']) {
-          const keyVal = m[keyField]
-          if (keyVal != null && String(keyVal).trim()) {
-            map[String(keyVal).trim()] = display
-          }
-        }
-      }
-      console.log('[AssetsView] admin 接口模型映射已建立:', Object.keys(map).length, '条')
-      modelDisplayNameMap.value = map
-      return
-    } catch (adminError) {
-      console.warn('[AssetsView] admin 接口不可用，回退到公共接口:', adminError.message)
-    }
-  }
-
-  // 公共接口 /api/v1/models（所有用户可用）
-  try {
-    const { data } = await request.get('/api/v1/models')
-    if (isUnmounted.value) return
-    if (data.code !== 200) throw new Error(data.message || '获取模型列表失败')
-
-    const lists = [data.data?.image_models, data.data?.video_models, data.data?.voices]
-    for (const list of lists) {
-      if (!Array.isArray(list)) continue
-      for (const m of list) {
-        const display = m.display_name || m.name
-        if (!display) continue
-        for (const keyField of ['id', 'model_id', 'name', 'model_name']) {
-          const keyVal = m[keyField]
-          if (keyVal != null && String(keyVal).trim()) {
-            map[String(keyVal).trim()] = display
-          }
-        }
-      }
-    }
-    console.log('[AssetsView] 公共接口模型映射已建立:', Object.keys(map).length, '条')
-  } catch (pubError) {
-    console.error('[AssetsView] 获取模型展示名映射失败:', pubError)
-  }
-
-  modelDisplayNameMap.value = map
-}
-
-// 根据资产的 generation_model / model_id 解析出展示名
-function getModelDisplayName(file) {
-  const key = file.generation_model || file.model_id
-  if (!key) return ''
-  const k = String(key).trim()
-  const map = modelDisplayNameMap.value
-
-  // 1. 精确匹配
-  if (map[k]) return map[k]
-
-  // 2. 去掉分辨率后缀再匹配（如 kling_3_0_1080p -> kling_3_0）
-  const resolutionSuffix = /[-_](480p|720p|1080p|2k|4k)$/i
-  const m = k.match(resolutionSuffix)
-  if (m) {
-    const base = k.slice(0, -m[0].length)
-    if (map[base]) return map[base]
-  }
-
-  // 3. 前缀匹配：找 map 中以 k 开头的 key（如 kling_3_0 匹配 kling_3_0_xxx）
-  for (const mapKey of Object.keys(map)) {
-    if (k.startsWith(mapKey) || mapKey.startsWith(k)) {
-      return map[mapKey]
-    }
-  }
-
-  // 4. 兜底返回原始值
-  return k
 }
 
 // 格式化视频时长（秒）为可读字符串
@@ -1402,8 +1306,10 @@ function transformMediaItem(item) {
     download_count: item.download_count || 0,
     use_count: item.use_count || 0,
     status: item.status || 'normal',
-    model_id: item.model_id || item.generation_model || null,
-    generation_model: item.generation_model || item.model_id || null,
+    model_id: item.model_id || null,
+    generation_model: item.generation_model || null,
+    model_display_name: item.generation_model || item.model_display_name || null,
+    model_name: item.model_name || null,
     media_source: item.media_source || ''
   }
 }
@@ -2182,8 +2088,7 @@ onMounted(async () => {
     console.log('[AssetsView] 开始并行加载数据')
     await Promise.all([
       loadFolderStats(),
-      loadMediaList(),
-      loadModelDisplayNameMap()
+      loadMediaList()
     ])
     console.log('[AssetsView] 数据加载完成')
   } catch (error) {

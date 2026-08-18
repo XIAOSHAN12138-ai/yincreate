@@ -1,5 +1,11 @@
 # 统一视频生成接口文档
 
+> ## 📌 PR-4.9（2026-08-12）：模型 ID 三层语义
+>
+> 请求 `model` 字段继续填业务 ID（如 `gpt_image_2_tokenswitch`），后端自动解析成上游 ID 调 token switch。响应中（账单流水、任务详情、素材库）的 `model` 相关字段返回的是 **`display_name`**（展示名）。
+>
+> 详见 [BILLING_API.md](BILLING_API.md) 和 [MEDIA_LIBRARY_API.md](MEDIA_LIBRARY_API.md) 顶部的 PR-4.9 说明。
+
 ## 概述
 
 统一视频生成接口 (`POST /api/v1/generate/video`) 是一个强大的接口，通过不同参数组合实现所有视频生成功能。
@@ -133,8 +139,7 @@
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `media_id` | string | 否（人脸场景推荐必填） | 我方素材库的 `media_id`（如 `MEDIA-IMG-002`）。传了优先走素材库资源化路径，适用于含人脸素材。详见 [§4.2 Seedance 素材库资源引用](#42-seedance-素材库资源引用media_id) |
-| url | string | 否 | 文件URL或base64。`media_id` 和 `url` 都有 → 优先用 `media_id`；只有 `url` → 走旧路径（适合非人脸素材） |
+| url | string | 是 | 文件URL或base64 |
 | type | string | 是 | 文件类型：`image` / `video` / `audio`（Seedance 2.0 支持 audio 参考） |
 | object_id | string | 否 | 主体ID，用于在Prompt中引用 |
 | reference_type | string | 否 | 参考类型：asset/style/feature/base |
@@ -270,117 +275,6 @@ result = client.content_generation.tasks.create(
     watermark=True,
 )
 ```
-
-### 4.2 Seedance 素材库资源引用（media_id）
-
-Seedance 2.0 系列模型（`doubao-seedance-2-0-260128` / `doubao-seedance-2-0-fast-260128`，走 Token Switch / neolink）**不允许直接上传含人脸的参考图/视频**。为了合规使用人像素材，平台推出了**素材库授权**方案：
-
-- 用户先把人像素材上传到我方素材库（等同一次普通上传）
-- Seedance 调用时，引用素材库里的素材（用 `media_id`）
-- 后端自动把素材注册到 Neolink 资源库，拿到 `tkres_xxx` 形式的资源 UUID
-- 用 `Asset://tkres_xxx` 协议提交给 Seedance
-
-> **注意**：`"seedance快捷通道"` 分组的 API Key **不需要**走资源库，直接传 http URL 即可。本文档针对的是非快捷通道（当前 `.env` 中 `VENDOR_B_API_KEY` 对应的通道）。
-
-#### 请求示例（传 media_id）
-
-```jsonc
-// ✅ 新写法：用户从素材库选素材，前端传 media_id
-{
-  "model": "doubao-seedance-2-0-260128",
-  "prompt": "让图片1中的人做视频1的蛋糕",
-  "parameters": {
-    "duration": 11,
-    "ratio": "16:9",
-    "references": [
-      {
-        "media_id": "MEDIA-IMG-002",     // ← 新字段：我方素材库的 media_id
-        "type": "image",
-        "role": "reference_image"
-      },
-      {
-        "media_id": "MEDIA-VID-005",     // ← 视频素材同理
-        "type": "video",
-        "role": "reference_video"
-      }
-    ]
-  }
-}
-```
-
-#### references[] 元素结构
-
-| 字段 | 类型 | 是否必填 | 说明 |
-|---|---|---|---|
-| `media_id` | string | **推荐必填**（人脸场景） | 我方素材库中的 `media_id`，形如 `MEDIA-IMG-002` |
-| `url` | string | 兼容旧字段 | 如果传了，会被忽略；保留不影响后端 |
-| `image_url` / `video_url` / `audio_url` | object | 兼容旧字段 | 同上 |
-| `type` | string | ✅ 必填 | `image` / `video` / `audio` |
-| `role` | string | 推荐 | `reference_image` / `reference_video` / `reference_audio` / `first_frame` / `last_frame`，默认按 `type` 推 |
-
-**字段优先级**：
-- `media_id` + `url` 都有 → 优先用 `media_id`，忽略 `url`
-- 只有 `media_id` → 走素材库资源化路径
-- 只有 `url` → 走旧路径（http URL 直接提交，适合非人脸）
-
-#### 端到端流程
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│ 用户在前端:                                                           │
-│   1) 打开素材库,选一张人像图 → 点击"用于 Seedance"                       │
-│   2) 选模型 doubao-seedance-2-0-260128,填 prompt,点"生成"              │
-│   3) 前端调用 POST /api/v1/generate/video,references[] 含 media_id      │
-└──────────────────────────────────────────────────────────────────────┘
-                              ↓
-┌──────────────────────────────────────────────────────────────────────┐
-│ 后端 vendor_b._generate_video_seedance:                                │
-│   4) 遍历 references[] 中所有带 media_id 的元素                        │
-│   5) 调用 SeedanceResourceService.ensure_seedance_resource(media_id) │
-│      ├─ 查 media_library.seedance_resource_uuid(已注册?)                │
-│      ├─ 没有 → 调 Neolink POST /api/model-resources 注册              │
-│      ├─ 轮询 GET /api/model-resources/{uuid} 直到 status=1(可用)     │
-│      ├─ 写回 media_library.seedance_resource_uuid                      │
-│      └─ 返回 "Asset://tkres_xxx"                                       │
-│   6) 改写 references 元素:                                             │
-│      {"media_id": "MEDIA-IMG-002", "type": "image", "role": "..."}    │
-│      →  {"type": "image", "role": "...",                               │
-│          "image_url": {"url": "Asset://tkres_xxx"}}                    │
-└──────────────────────────────────────────────────────────────────────┘
-                              ↓
-┌──────────────────────────────────────────────────────────────────────┐
-│ Neolink 上游:                                                          │
-│   收到 Asset://tkres_xxx,识别为已授权素材,正常生成                       │
-└──────────────────────────────────────────────────────────────────────┘
-```
-
-#### 性能 & 缓存说明
-
-- **首次调用**（media_id 还没注册过）：需要 1-30s 等 Neolink 同步人像资源
-- **第二次以后**（同一 media_id）：直接命中 `media_library.seedance_resource_uuid` 字段，**毫秒级返回**
-- 进程重启后第一次调用也会命中字段（已持久化），不会重新注册
-
-也就是说：**只要 media_id 注册过一次，后续永远秒级**。
-
-#### 边界 & 错误处理
-
-**媒体 ID 不存在**：传的 `media_id` 在我方素材库查不到 → 该 ref 保留原样（`url` 还在就走 URL，没有就忽略），Seedance 上游如果因此报缺图，错误信息透传到前端。
-
-**Neolink 资源同步失败**：Neolink 同步超 30s 或状态变 `failed` → 整次 Seedance 调用被标记为失败，前端拿到 5xx。
-
-**用户绕过素材库直接传 URL**：`references[]` 元素没有 `media_id` 字段时，后端原样透传 `url` 给 Seedance，适用于非人脸素材（风景、产品图）以及"seedance 快捷通道"分组。
-
-**删除素材的影响**：用户在素材库删除素材 → `status='deleted'`，`seedance_resource_uuid` 字段不会自动清空。已删除素材的 `media_id` 在 `ensure_seedance_resource` 里查不到行，走"媒体 ID 不存在"路径，原样跳过。
-
-#### 相关配置
-
-- 开关：`SEEDANCE_RESOURCE_LIBRARY_ENABLED`（默认 `true`，在 `.env` 配置）
-  - `true`：走素材库资源化路径（非快捷通道场景）
-  - `false`：跳过资源化，直接传 URL（快捷通道场景）
-- 后端服务：`app/services/seedance_resource_service.py`
-- 后端客户端：`app/vendors/seedance_resource_client.py`
-- 集成点：`app/vendors/vendor_b.py`（`_generate_video_seedance`）
-- 数据库字段：`database/sql/schema/35_media_library_seedance_uuid.sql`
 
 ### 5. 智能分镜
 

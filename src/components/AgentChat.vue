@@ -85,7 +85,7 @@
         <template v-else>
         <!-- Agent 选择器 -->
         <div v-if="agents.length > 1" class="agent-picker">
-          <select v-model="currentAgentId" class="agent-select" :disabled="loading">
+          <select v-model="currentAgentId" class="agent-select" :disabled="loading" @change="resetConversation">
             <option v-for="a in agents" :key="a.agent_id" :value="a.agent_id">
               {{ a.display_name || a.agent_id }}
             </option>
@@ -106,7 +106,7 @@
             <span v-if="msg.role === 'assistant'" class="agent-msg-avatar">
               <LucideIcon name="sparkles" svgStyle="width: 14px; height: 14px;" />
             </span>
-            <div class="agent-msg-bubble">{{ msg.content }}</div>
+            <div v-if="msg.content" class="agent-msg-bubble">{{ msg.content }}</div>
           </div>
           <!-- 正在输入指示 -->
           <div v-if="loading" class="agent-msg agent-msg-assistant">
@@ -177,14 +177,13 @@ import { useUserStore } from '../stores/user'
 import LucideIcon from './LucideIcon.vue'
 import {
   listAgentsApi,
+  createAgentConversationApi,
+  listAgentConversationsApi,
+  getAgentConversationApi,
+  deleteAgentConversationApi,
   chatStreamApi,
-  genRequestId,
-  genConversationId
+  genRequestId
 } from '../api/agent'
-
-const STORAGE_KEY = 'agent_chat_state'
-const HISTORY_KEY = 'agent_chat_history'
-const MAX_HISTORY = 50
 
 const userStore = useUserStore()
 
@@ -222,9 +221,7 @@ const showSuggestions = ref(true)
 const agents = ref([])
 const currentAgentId = ref(import.meta.env.VITE_AGENT_DEFAULT_ID || 'deepseek-text')
 
-// 会话状态：首轮 null / 0，后续原样回传
-const conversationState = ref(null)
-const stateVersion = ref(0)
+// 当前服务端会话与隔离身份
 const conversationId = ref(null)
 const userId = ref(null)
 const tenantId = ref(null)
@@ -264,91 +261,88 @@ function formatTime(ts) {
 }
 
 /**
- * 从消息列表提取会话标题（首条用户消息，截断 24 字）
+ * 从服务端消息结构提取可展示文本
  */
-function extractTitle(msgs) {
-  const firstUser = msgs.find(m => m.role === 'user')
-  if (!firstUser) return '新对话'
-  const t = firstUser.content.replace(/\s+/g, ' ').trim()
-  return t.length > 24 ? t.slice(0, 24) + '…' : t
-}
-
-/**
- * 加载本地历史会话列表
- */
-function loadHistory() {
-  try {
-    const raw = localStorage.getItem(HISTORY_KEY)
-    if (!raw) return []
-    return JSON.parse(raw) || []
-  } catch {
-    return []
+function messageText(content) {
+  if (typeof content === 'string') return content
+  if (Array.isArray(content)) {
+    return content.map(part => part?.text || '').filter(Boolean).join('\n')
   }
+  return content?.text || messageText(content?.content) || ''
 }
 
 /**
- * 持久化历史会话列表（截断上限，最新在前）
+ * 统一服务端会话摘要字段
  */
-function saveHistory() {
-  try {
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(history.value.slice(0, MAX_HISTORY)))
-  } catch {
-    // 存储失败时忽略
+function normalizeConversation(item) {
+  return {
+    ...item,
+    id: item.id || item.conversation_id,
+    title: item.title || '新对话',
+    agentId: item.agent_id,
+    updatedAt: item.updated_at || item.created_at
   }
 }
 
 /**
- * 将当前会话 upsert 到历史列表
+ * 平台接口的租户与用户隔离参数
  */
-function upsertHistory() {
-  const item = {
-    id: currentHistoryId.value,
-    conversationId: conversationId.value,
-    title: extractTitle(messages.value),
-    messages: messages.value.map(m => ({ role: m.role, content: m.content })),
-    conversationState: conversationState.value,
-    stateVersion: stateVersion.value,
-    agentId: currentAgentId.value,
-    updatedAt: Date.now()
-  }
-  const idx = history.value.findIndex(h => h.id === item.id)
-  if (idx !== -1) {
-    history.value[idx] = item
-  } else {
-    history.value.unshift(item)
-  }
-  history.value.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
-  saveHistory()
+function identityParams() {
+  return { tenant_id: tenantId.value, user_id: userId.value }
+}
+
+/**
+ * 从服务端加载历史会话
+ */
+async function loadHistory() {
+  ensureIdentity()
+  const data = await listAgentConversationsApi(identityParams())
+  const items = Array.isArray(data) ? data : (data.items || data.conversations || [])
+  history.value = items.map(normalizeConversation)
 }
 
 /**
  * 切换到指定历史会话
  */
-function switchConversation(item) {
+async function switchConversation(item) {
   if (loading.value) return
-  currentHistoryId.value = item.id
-  conversationId.value = item.conversationId
-  conversationState.value = item.conversationState || null
-  stateVersion.value = item.stateVersion || 0
-  if (item.agentId) currentAgentId.value = item.agentId
-  messages.value = (item.messages || []).map(m => ({ id: ++msgId, role: m.role, content: m.content }))
-  showSuggestions.value = messages.value.every(m => m.role !== 'user')
+  loading.value = true
   agentError.value = null
-  view.value = 'chat'
-  persistState()
-  nextTick(() => { scrollToBottom(); inputRef.value?.focus() })
+  try {
+    const detail = await getAgentConversationApi(item.id, identityParams())
+    const serverMessages = detail.messages || detail.items || detail.conversation?.messages || []
+    currentHistoryId.value = item.id
+    conversationId.value = item.id
+    if (item.agentId || detail.agent_id) currentAgentId.value = item.agentId || detail.agent_id
+    messages.value = serverMessages.map(m => ({
+      id: m.id || m.message_id || ++msgId,
+      role: m.role,
+      content: messageText(m.content ?? m.message)
+    }))
+    showSuggestions.value = messages.value.every(m => m.role !== 'user')
+    view.value = 'chat'
+    nextTick(() => { scrollToBottom(); inputRef.value?.focus() })
+  } catch (e) {
+    agentError.value = `加载对话失败：${e.message}`
+  } finally {
+    loading.value = false
+  }
 }
 
 /**
  * 删除指定历史会话
  */
-function deleteConversation(id) {
-  history.value = history.value.filter(h => h.id !== id)
-  saveHistory()
-  // 如果删的是当前会话，回到新对话
-  if (id === currentHistoryId.value) {
-    resetConversation()
-    view.value = 'history'
+async function deleteConversation(id) {
+  if (loading.value) return
+  try {
+    await deleteAgentConversationApi(id, identityParams())
+    history.value = history.value.filter(h => h.id !== id)
+    if (id === currentHistoryId.value) {
+      resetConversation()
+      view.value = 'history'
+    }
+  } catch (e) {
+    agentError.value = `删除对话失败：${e.message}`
   }
 }
 
@@ -361,6 +355,7 @@ function toggleOpen() {
       // 首次打开时初始化会话身份与 Agent 列表
       ensureIdentity()
       fetchAgentsOnce()
+      fetchHistoryOnce()
     })
   }
 }
@@ -380,70 +375,14 @@ function scrollToBottom() {
 }
 
 /**
- * 初始化身份字段（tenant_id / user_id / conversation_id）
- * 优先从 localStorage 恢复，避免刷新丢失上下文
+ * 初始化 tenant_id / user_id 隔离身份
  */
 function ensureIdentity() {
-  // 加载历史列表（仅一次）
-  if (history.value.length === 0) {
-    history.value = loadHistory()
-  }
-
-  if (conversationId.value) return
+  if (userId.value && tenantId.value) return
 
   const user = userStore.user || {}
   userId.value = user.user_id || 'anonymous'
   tenantId.value = user.enterprise_id || user.user_id || 'default-tenant'
-
-  const stored = loadStoredState()
-  if (stored?.conversationId) {
-    // 尝试从历史中恢复最近一条会话内容
-    const recent = history.value.find(h => h.conversationId === stored.conversationId)
-    if (recent) {
-      switchConversation(recent)
-      return
-    }
-    conversationId.value = stored.conversationId
-    conversationState.value = stored.conversationState || null
-    stateVersion.value = stored.stateVersion || 0
-  } else {
-    conversationId.value = genConversationId()
-    conversationState.value = null
-    stateVersion.value = 0
-    currentHistoryId.value = `h-${Date.now().toString(36)}-${Math.random().toString(16).slice(2, 6)}`
-    persistState()
-  }
-}
-
-/**
- * 加载本地缓存的会话状态
- */
-function loadStoredState() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return null
-    return JSON.parse(raw)
-  } catch {
-    return null
-  }
-}
-
-/**
- * 持久化会话状态（仅存身份与状态，不存消息）
- */
-function persistState() {
-  try {
-    localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({
-        conversationId: conversationId.value,
-        conversationState: conversationState.value,
-        stateVersion: stateVersion.value
-      })
-    )
-  } catch {
-    // 存储失败时忽略，不影响对话
-  }
 }
 
 /**
@@ -465,23 +404,46 @@ async function fetchAgentsOnce() {
   }
 }
 
+let historyLoaded = false
+async function fetchHistoryOnce() {
+  if (historyLoaded) return
+  historyLoaded = true
+  try {
+    await loadHistory()
+  } catch (e) {
+    historyLoaded = false
+    agentError.value = `获取历史对话失败：${e.message}`
+  }
+}
+
 /**
  * 重置会话：清空状态并开启新对话
  */
 function resetConversation() {
   if (loading.value) return
-  conversationId.value = genConversationId()
-  conversationState.value = null
-  stateVersion.value = 0
-  currentHistoryId.value = `h-${Date.now().toString(36)}-${Math.random().toString(16).slice(2, 6)}`
+  conversationId.value = null
+  currentHistoryId.value = null
   messages.value = [
     { id: ++msgId, role: 'assistant', content: '新对话已开始，请问需要什么帮助？' }
   ]
   showSuggestions.value = true
   agentError.value = null
   view.value = 'chat'
-  persistState()
   scrollToBottom()
+}
+
+async function ensureConversation() {
+  if (conversationId.value) return conversationId.value
+  const conversation = await createAgentConversationApi({
+    ...identityParams(),
+    agent_id: currentAgentId.value,
+    memory_enabled: false
+  })
+  const id = conversation.id || conversation.conversation_id
+  if (!id) throw new Error('创建会话响应缺少 id')
+  conversationId.value = id
+  currentHistoryId.value = id
+  return id
 }
 
 async function send(text) {
@@ -490,25 +452,29 @@ async function send(text) {
 
   ensureIdentity()
 
-  showSuggestions.value = false
   agentError.value = null
+  loading.value = true
+  try {
+    await ensureConversation()
+  } catch (e) {
+    agentError.value = `创建对话失败：${e.message}`
+    loading.value = false
+    return
+  }
+
+  showSuggestions.value = false
   messages.value.push({ id: ++msgId, role: 'user', content })
   draft.value = ''
   nextTick(autoGrow)
   scrollToBottom()
 
-  // 用户发送后立即登记历史，确保即使后端异常也能看到已发起的对话
-  upsertHistory()
-
   await streamChat(content)
 }
 
 /**
- * 调用 /v1/chat/stream 并流式渲染
+ * 调用平台会话流式接口并渲染回复
  */
 async function streamChat(userContent) {
-  loading.value = true
-
   // 提前插入一条空的 assistant 消息，用于流式追加
   const assistantMsg = ref({ id: ++msgId, role: 'assistant', content: '' })
   messages.value.push(assistantMsg.value)
@@ -519,54 +485,43 @@ async function streamChat(userContent) {
     request_id: requestId,
     tenant_id: tenantId.value,
     user_id: userId.value,
-    conversation_id: conversationId.value,
-    agent_id: currentAgentId.value,
     message: {
       content: [{ type: 'text', text: userContent }]
-    },
-    conversation_state: conversationState.value,
-    state_version: stateVersion.value,
-    memory_enabled: false,
-    user_memory_state: null
+    }
   }
 
-  // 记录本次请求前的状态，出错时回滚
-  const prevConversationState = conversationState.value
-  const prevStateVersion = stateVersion.value
+  try {
+    await chatStreamApi(conversationId.value, payload, {
+      onDelta: (delta) => {
+        assistantMsg.value.content += delta
+        scrollToBottom()
+      },
+      onCompleted: async (data) => {
+        // 兜底：若服务端未推送 delta，使用 completed 中的 assistant_message
+        if (!assistantMsg.value.content && data.assistant_message) {
+          assistantMsg.value.content = data.assistant_message
+        }
+        try {
+          await loadHistory()
+        } catch {
+          // 回复已成功，历史列表刷新失败不影响本轮对话
+        }
+        scrollToBottom()
+      },
+      onError: (err) => {
+        agentError.value = err.message || '智能体服务返回错误'
 
-  await chatStreamApi(payload, {
-    onDelta: (delta) => {
-      assistantMsg.value.content += delta
-      scrollToBottom()
-    },
-    onCompleted: (data) => {
-      // 收到 completed 才能保存新状态
-      conversationState.value = data.conversation_state
-      stateVersion.value = data.new_state_version ?? prevStateVersion
-      // 兜底：若服务端未推送 delta，使用 completed 中的 assistant_message
-      if (!assistantMsg.value.content && data.assistant_message) {
-        assistantMsg.value.content = data.assistant_message
+        // 移除空的 assistant 占位消息
+        const idx = messages.value.findIndex(m => m.id === assistantMsg.value.id)
+        if (idx !== -1 && !messages.value[idx].content) {
+          messages.value.splice(idx, 1)
+        }
+        scrollToBottom()
       }
-      persistState()
-      upsertHistory()
-      scrollToBottom()
-    },
-    onError: (err) => {
-      // 出错时不更新状态，保留旧状态
-      conversationState.value = prevConversationState
-      stateVersion.value = prevStateVersion
-      agentError.value = err.message || '智能体服务返回错误'
-
-      // 移除空的 assistant 占位消息
-      const idx = messages.value.findIndex(m => m.id === assistantMsg.value.id)
-      if (idx !== -1 && !messages.value[idx].content) {
-        messages.value.splice(idx, 1)
-      }
-      scrollToBottom()
-    }
-  })
-
-  loading.value = false
+    })
+  } finally {
+    loading.value = false
+  }
 }
 
 function onKeydown(e) {

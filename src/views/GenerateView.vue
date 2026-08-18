@@ -390,7 +390,7 @@
                       >
                         <div class="model-option-main">
                           <span class="model-name">
-                            {{ model.name }}
+                            {{ model.display_name || model.name }}
                             <span v-if="model.is_default" class="default-badge">推荐</span>
                           </span>
                         </div>
@@ -821,7 +821,9 @@
               </div>
               <div v-else class="card-placeholder-inline">
                 <i data-lucide="loader" style="width: 24px; height: 24px;"></i>
-                <span>{{ card.progress && card.progress > 0 ? `生成中... (${card.progress}%)` : '生成中...' }}</span>
+                <span v-if="card.syncState === 'interrupted'">状态同步中断，返回页面后将自动重试</span>
+                <span v-else-if="card.syncState === 'paused'">生成时间较长，返回页面后将继续同步</span>
+                <span v-else>{{ card.progress && card.progress > 0 ? `生成中... (${card.progress}%)` : '生成中...' }}</span>
               </div>
 
               <!-- 操作按钮行 -->
@@ -1127,7 +1129,7 @@
                       >
                         <div class="model-option-main">
                           <span class="model-name">
-                            {{ model.name }}
+                            {{ model.display_name || model.name }}
                             <span v-if="model.is_default" class="default-badge">推荐</span>
                           </span>
                         </div>
@@ -1534,7 +1536,9 @@ function saveCardGenParams(conversationId, taskId, params) {
       quality: params.quality || existing.quality || '',
       duration: params.duration ?? existing.duration ?? 0,
       type: params.type || existing.type || 'image',
-      prompt: params.prompt || existing.prompt || ''
+      prompt: params.prompt || existing.prompt || '',
+      status: params.status || existing.status || 'processing',
+      createdAt: params.createdAt || existing.createdAt || null
     }
     localStorage.setItem(GEN_PARAMS_STORAGE_KEY, JSON.stringify(all))
   } catch (e) {
@@ -1558,10 +1562,18 @@ function getAllCachedTaskIds(conversationId) {
   if (!conversationId) return []
   try {
     const all = JSON.parse(localStorage.getItem(GEN_PARAMS_STORAGE_KEY) || '{}')
-    return Object.keys(all[String(conversationId)] || {})
+    return Object.entries(all[String(conversationId)] || {})
+      .filter(([, value]) => !['completed', 'failed'].includes(value?.status))
+      .map(([taskId]) => taskId)
   } catch (e) {
     return []
   }
+}
+
+function setCachedTaskStatus(conversationId, taskId, status) {
+  const cached = loadCardGenParams(conversationId, taskId)
+  if (!cached) return
+  saveCardGenParams(conversationId, taskId, { ...cached, status })
 }
 
 // ========== 即梦AI风格新增状态 ==========
@@ -1902,20 +1914,76 @@ const canGenerate = computed(() => {
   return true
 })
 
+const SOUND_TOGGLE_MODES = new Set(['free', 'forced-sound', 'disabled-silent', 'hidden'])
+
+function resolveSoundToggleMode(model) {
+  if (!model) return 'disabled-silent'
+  if (SOUND_TOGGLE_MODES.has(model.sound_mode)) return model.sound_mode
+  // 兼容仅返回 supports_audio 的新版接口，以及尚未补 sound_mode 的历史数据。
+  return model.supports_audio === true ? 'free' : 'hidden'
+}
+
 const showSoundToggle = computed(() => {
   if (selectedType.value !== 'video') return false
-  // sound_mode 为 'hidden' 时隐藏声音开关
   const model = models.value.find(m => m.id === selectedModel.value)
-  if (model?.sound_mode === 'hidden') return false
-  return true
+  return resolveSoundToggleMode(model) !== 'hidden'
 })
+
+function getModelIdentity(model) {
+  return [model?.business_model_id, model?.id, model?.model_id, model?.name, model?.display_name]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
+    .replaceAll('_', '-')
+}
+
+const referenceLimitFields = {
+  image: 'max_reference_images',
+  video: 'max_reference_videos',
+  audio: 'max_reference_audios'
+}
+
+function getReferenceLimit(type) {
+  const model = models.value.find(m => m.id === selectedModel.value)
+  const value = Number(model?.[referenceLimitFields[type]])
+  // 兼容旧模型数据：0 是历史默认值，表示未配置限制；仅正整数才启用上限。
+  return Number.isInteger(value) && value > 0 ? value : null
+}
+
+function getAttachedReferenceCount(type, excludedDualSlot = null) {
+  const uploadedCount = uploadedFiles.value.filter(file => file.type === type).length
+  const dualCount = Object.entries(dualUploadSlots.value)
+    .filter(([slot, file]) => slot !== excludedDualSlot && file?.type === type)
+    .length
+  return uploadedCount + dualCount
+}
+
+function canAddReference(type, amount = 1, excludedDualSlot = null) {
+  const limit = getReferenceLimit(type)
+  if (limit === null) return true
+  const current = getAttachedReferenceCount(type, excludedDualSlot)
+  if (current + amount <= limit) return true
+  showToast(`${getFileTypeLabel(type)}参考素材最多可添加 ${limit} 个`, 'warning')
+  return false
+}
+
+function validateReferenceLimits(files) {
+  for (const type of Object.keys(referenceLimitFields)) {
+    const limit = getReferenceLimit(type)
+    if (limit === null) continue
+    const count = files.filter(file => file.type === type).length
+    if (count > limit) {
+      throw new Error(`${getFileTypeLabel(type)}参考素材最多可添加 ${limit} 个，当前为 ${count} 个`)
+    }
+  }
+}
 
 // 图片模型类型检测
 const isGptImageModel = computed(() => {
   if (selectedType.value !== 'image') return false
   const model = models.value.find(m => m.id === selectedModel.value)
   if (!model) return false
-  const modelId = (model.id || model.name || '').toLowerCase()
+  const modelId = getModelIdentity(model)
   // GPT图像模型: gpt-image-1, gpt-image-1.5, chatgpt-image-latest, dall-e-2, dall-e-3
   return modelId.includes('gpt-image') || modelId.includes('chatgpt-image') || modelId.includes('dall-e')
 })
@@ -1924,7 +1992,7 @@ const isQwenWanModel = computed(() => {
   if (selectedType.value !== 'image') return false
   const model = models.value.find(m => m.id === selectedModel.value)
   if (!model) return false
-  const modelId = (model.id || model.name || '').toLowerCase()
+  const modelId = getModelIdentity(model)
   // 千问/万象模型: qwen-vl-max, wan2.1-t2i-turbo 等
   return modelId.includes('qwen') || modelId.includes('wan')
 })
@@ -1964,21 +2032,7 @@ const showImageAdvancedParams = computed(() => selectedType.value === 'image')
 const soundToggleMode = computed(() => {
   if (selectedType.value !== 'video') return 'hidden'
   const model = models.value.find(m => m.id === selectedModel.value)
-  if (!model) return 'disabled-silent'
-  // 优先读取模型对象的 sound_mode 字段
-  if (model.sound_mode) return model.sound_mode
-  // 降级：兼容旧数据，保留原有的字符串匹配逻辑
-  const name = (model.name || model.id || '').toLowerCase()
-  const id = (model.id || '').toLowerCase()
-  const isFreeChoice =
-    (name.includes('gv') && name.includes('3.1')) ||
-    (name.includes('kling') && (name.includes('2.6') || name.includes('3.0'))) ||
-    (id.includes('kling') && (id.includes('2.6') || id.includes('3.0') || id.includes('2_6') || id.includes('3_0'))) ||
-    (name.includes('seedance') && name.includes('2.0')) ||
-    (id.includes('seedance') && id.includes('2.0'))
-  if (isFreeChoice) return 'free'
-  if (name.includes('happyhorse') || id.includes('happyhorse')) return 'forced-sound'
-  return 'disabled-silent'
+  return resolveSoundToggleMode(model)
 })
 
 const soundToggleDisabled = computed(() => soundToggleMode.value !== 'free')
@@ -2062,7 +2116,7 @@ const qualities = [
 const selectedModelName = computed(() => {
   if (!selectedModel.value) return '默认模型'
   const model = models.value.find(m => m.id === selectedModel.value)
-  return model ? model.name : '默认模型'
+  return model ? (model.display_name || model.name) : '默认模型'
 })
 
 const selectedQualityLabel = computed(() => {
@@ -2070,28 +2124,35 @@ const selectedQualityLabel = computed(() => {
   return quality ? quality.label : '2K'
 })
 
+function toQualityOption(resolution) {
+  const raw = String(resolution || '').trim()
+  const id = raw.toLowerCase()
+  const standard = qualities.find(quality => quality.id === id)
+  if (standard) return standard
+  const pxMatch = raw.match(/^(\d+)x\d+$/i)
+  return { id, label: pxMatch ? `${pxMatch[1]}P` : raw.toUpperCase() }
+}
+
+function uniqueQualityOptions(resolutions) {
+  const seen = new Set()
+  return resolutions.map(toQualityOption).filter(option => {
+    if (!option.id || seen.has(option.id)) return false
+    seen.add(option.id)
+    return true
+  })
+}
+
 // 根据当前模型是否有分辨率变体，过滤可选的分辨率列表
 const availableQualities = computed(() => {
   const model = models.value.find(m => m.id === selectedModel.value)
   if (!model) return qualities
   // 优先使用模型的 supported_resolutions 字段
   if (model.supported_resolutions && model.supported_resolutions.length > 0) {
-    const supportedLower = model.supported_resolutions.map(r => String(r).toLowerCase())
-    const matched = qualities.filter(q => supportedLower.includes(q.id))
-    // 匹配到标准分辨率（480p/720p/1080p/2k/4k）则返回过滤结果
-    if (matched.length > 0) return matched
-    // 未匹配（如图片模型的 WxH 格式 256x256/1024x1024）：提取宽像素值转换为 256P/512P/1024P 格式
-    return model.supported_resolutions.map(r => {
-      const label = String(r)
-      const pxMatch = label.match(/^(\d+)x\d+$/)
-      const displayLabel = pxMatch ? `${pxMatch[1]}P` : label
-      return { id: label.toLowerCase(), label: displayLabel }
-    })
+    return uniqueQualityOptions(model.supported_resolutions)
   }
   // 降级：使用 _resolutionVariants
   if (model._hasResolutionVariants && model._resolutionVariants) {
-    const supportedKeys = Object.keys(model._resolutionVariants)
-    return qualities.filter(q => supportedKeys.includes(q.id))
+    return uniqueQualityOptions(Object.keys(model._resolutionVariants))
   }
   return qualities
 })
@@ -2111,13 +2172,13 @@ function getModelNameById(modelId) {
   if (!model) {
     model = allModels.find(m => m.name === modelId || m.display_name === modelId)
   }
-  if (model) return model.name
+  if (model) return model.display_name || model.name
   // 再检查是否是某个合并模型的分辨率变体（如 happyhorse-1.0-r2v-1080p）
   const variantModel = allModels.find(m =>
     m._hasResolutionVariants && m._resolutionVariants &&
     Object.values(m._resolutionVariants).includes(modelId)
   )
-  return variantModel ? variantModel.name : '默认模型'
+  return variantModel ? (variantModel.display_name || variantModel.name) : String(modelId)
 }
 
 // 格式化卡片创建时间：支持 ISO 字符串（后端 created_at）和时间戳（前端 Date.now()）
@@ -2655,7 +2716,13 @@ function handleUploadType(fileType) {
     default: input.accept = 'image/*,video/*,audio/*'
   }
   input.onchange = async (e) => {
-    const files = Array.from(e.target.files)
+    const selectedFiles = Array.from(e.target.files)
+    const limit = getReferenceLimit(fileType)
+    const available = limit === null ? selectedFiles.length : Math.max(0, limit - getAttachedReferenceCount(fileType))
+    const files = selectedFiles.slice(0, available)
+    if (files.length < selectedFiles.length) {
+      showToast(`${getFileTypeLabel(fileType)}参考素材最多可添加 ${limit} 个`, 'warning')
+    }
     for (const file of files) {
       const reader = new FileReader()
       reader.onload = (event) => {
@@ -2721,7 +2788,7 @@ function onCloudVideoError(e) {
 function transformCloudAsset(item) {
   return {
     id: item.media_id || item.id,
-    media_id: item.media_id || null,  // Seedance 素材库引用所需（见 SEEDANCE_RESOURCE_LIBRARY.md §2）
+    media_id: item.media_id || null,
     type: item.media_type || 'image',
     name: item.media_name || '未命名',
     url: item.media_url || '',
@@ -2828,6 +2895,7 @@ function selectCloudAsset(asset) {
   // 如果是从双上传框的云资料库选择，直接填入对应slot
   if (currentDualUploadSlot.value) {
     const slotKey = currentDualUploadSlot.value
+    if (!canAddReference(asset.type, 1, slotKey)) return
     const config = dualUploadConfig.value
     const slotConfig = config ? config[slotKey] : null
     dualUploadSlots.value[slotKey] = {
@@ -2835,7 +2903,7 @@ function selectCloudAsset(asset) {
       url: assetUrl,
       purpose: slotConfig ? slotConfig.key : slotKey,
       object_id: slotConfig ? `${slotConfig.key}_1` : `${slotKey}_1`,
-      media_id: asset.media_id || null,  // 透传素材库 media_id，供 Seedance 资源化（见 SEEDANCE_RESOURCE_LIBRARY.md §2）
+      media_id: asset.media_id || null,
       name: asset.name,
       fromCloud: true
     }
@@ -2844,12 +2912,13 @@ function selectCloudAsset(asset) {
     nextTick(() => { if (window.lucide) lucide.createIcons() })
     return
   }
+  if (!canAddReference(asset.type)) return
   uploadedFiles.value.push({
     type: asset.type,
     url: assetUrl,
     purpose: 'reference',
     object_id: `cloud_${asset.id}`,
-    media_id: asset.media_id || null,  // 透传素材库 media_id，供 Seedance 资源化（见 SEEDANCE_RESOURCE_LIBRARY.md §2）
+    media_id: asset.media_id || null,
     name: asset.name,
     fromCloud: true
   })
@@ -2907,6 +2976,7 @@ function handleDualUpload(slotKey, accept) {
       let detectedType = 'image'
       if (file.type.startsWith('video/')) detectedType = 'video'
       else if (file.type.startsWith('audio/')) detectedType = 'audio'
+      if (!canAddReference(detectedType, 1, slotKey)) return
       const config = dualUploadConfig.value
       const slotConfig = config ? config[slotKey] : null
       dualUploadSlots.value[slotKey] = {
@@ -3245,7 +3315,10 @@ function focusAtTagById(atId) {
 }
 
 function clickToReference(file) {
-  if (!uploadedFiles.value.some(f => f.object_id === file.object_id)) uploadedFiles.value.push({ ...file })
+  if (!uploadedFiles.value.some(f => f.object_id === file.object_id)) {
+    if (!canAddReference(file.type)) return
+    uploadedFiles.value.push({ ...file })
+  }
   atMentionCandidates.value = [file]
   showAtMentionDropdown.value = true
   activeMentionIndex.value = 0
@@ -3604,83 +3677,20 @@ function getCurrentParams() {
 
 // ========== 价格估算函数（必须在变量声明之后） ==========
 
-/**
- * 在 price_tiers 中按分辨率查找价格（大小写不敏感）
- * @returns {number|null} 匹配到的价格，或 null
- */
-function findTierPrice(tiers, resolution) {
-  if (!tiers || typeof tiers !== 'object') return null
-  const resLower = String(resolution).toLowerCase()
-  for (const [key, value] of Object.entries(tiers)) {
-    if (String(key).toLowerCase() === resLower) {
-      const v = Number(value)
-      if (!isNaN(v)) return v
-    }
-  }
-  // 兜底 default 键
-  for (const dk of ['default', 'Default', 'DEFAULT']) {
-    if (tiers[dk] != null) {
-      const v = Number(tiers[dk])
-      if (!isNaN(v)) return v
-    }
-  }
-  return null
+function getBusinessModelId(model, fallbackId = '') {
+  const explicitBusinessId = String(model?.business_model_id || '').trim()
+  if (explicitBusinessId) return explicitBusinessId
+
+  // 兼容公共模型接口尚未透传 business_model_id 的旧响应：
+  // 内部 model_id 可能以 _vendor_a / _vendor_b 结尾，生成接口只接收稳定业务 ID。
+  return String(fallbackId || model?.id || model?.name || '')
+    .trim()
+    .replace(/_vendor_[ab]$/i, '')
 }
 
-/**
- * 根据模型自带的价格字段在前端本地计算积分消耗
- * @returns {number|null} 算出的积分，或 null（字段不可用，需走后端）
- */
-function calculateLocalPrice(model, outputType, resolution, duration) {
-  // 如果模型有分辨率变体，优先使用对应变体的价格字段
-  let priceData = model
-  if (model._variantPriceData) {
-    const resLower = String(resolution).toLowerCase()
-    // 精确匹配
-    if (model._variantPriceData[resLower]) {
-      priceData = model._variantPriceData[resLower]
-    } else {
-      // 尝试大小写不敏感匹配
-      for (const [key, value] of Object.entries(model._variantPriceData)) {
-        if (String(key).toLowerCase() === resLower && value) {
-          priceData = value
-          break
-        }
-      }
-    }
-  }
-
-  const multiplier = Number(priceData.price_multiplier) || 1
-
-  if (outputType === 'image') {
-    // price_tiers 优先
-    const tierPrice = findTierPrice(priceData.price_tiers, resolution)
-    if (tierPrice !== null) return tierPrice * multiplier
-    // 回退 price_per_request
-    if (priceData.price_per_request != null) {
-      const v = Number(priceData.price_per_request)
-      if (!isNaN(v)) return v * multiplier
-    }
-    return null
-  }
-
-  if (outputType === 'video') {
-    const dur = duration || 5
-    const tierPrice = findTierPrice(priceData.price_tiers, resolution)
-    if (tierPrice !== null) return tierPrice * dur * multiplier
-    if (priceData.price_per_second != null) {
-      const v = Number(priceData.price_per_second)
-      if (!isNaN(v)) return v * dur * multiplier
-    }
-    return null
-  }
-
-  // digital_human / audio → 按次
-  if (priceData.price_per_request != null) {
-    const v = Number(priceData.price_per_request)
-    if (!isNaN(v)) return v * multiplier
-  }
-  return null
+function getTaskDisplayModel(taskDetail) {
+  const detail = taskDetail?.data || taskDetail
+  return detail?.decoded_generation_params?.model || detail?.model_id || detail?.model_name || ''
 }
 
 async function fetchEstimatedPrice() {
@@ -3692,19 +3702,7 @@ async function fetchEstimatedPrice() {
   let outputType = selectedType.value === 'digital-human' ? 'digital_human' : selectedType.value
 
   // 与 buildGenerateRequest 保持一致：分辨率变体模型要走实际 model_id，否则后端按展示名查不到
-  let submitModelValue
-  if (currentModel._hasResolutionVariants && currentModel._resolutionVariants) {
-    const targetRes = String(selectedQuality.value || '').toLowerCase()
-    const variantModelId = currentModel._resolutionVariants[targetRes]
-    if (variantModelId) {
-      submitModelValue = String(variantModelId).trim()
-    } else {
-      const firstVariant = Object.values(currentModel._resolutionVariants)[0]
-      submitModelValue = String(firstVariant || currentModel.id || '').trim()
-    }
-  } else {
-    submitModelValue = String(currentModel.id || currentModel.name || '').trim()
-  }
+  const submitModelValue = getBusinessModelId(currentModel)
 
   const requestParams = {
     model: submitModelValue,
@@ -3716,42 +3714,14 @@ async function fetchEstimatedPrice() {
 
   if (outputType === 'video') {
     requestParams.parameters.duration = videoDuration.value
-    // 仅在模型支持音频开关(free 模式)时发送 with_audio 参数
-    // forced-sound 模型原生有声，disabled-silent 模型不支持音频
-    if (soundToggleMode.value === 'free') {
-      requestParams.parameters.with_audio = videoSoundEnabled.value
-    }
+    // PR-4.11：视频估价必须显式选择 silent / with_audio 价格档。
+    requestParams.parameters.with_audio = soundToggleMode.value === 'free' && videoSoundEnabled.value
   }
   if (outputType === 'image') {
     requestParams.parameters.count = 1
   }
 
-  // 优先尝试前端本地计算（使用模型自带价格字段）
-  const localCost = calculateLocalPrice(currentModel, outputType, params.resolution, videoDuration.value)
-  if (localCost !== null) {
-    console.log('[价格估算] 使用本地价格字段计算:', localCost, {
-      price_per_request: currentModel.price_per_request,
-      price_per_second: currentModel.price_per_second,
-      price_tiers: currentModel.price_tiers,
-      price_multiplier: currentModel.price_multiplier
-    })
-    estimatedPrice.value = {
-      estimated_cost: parseFloat(localCost.toFixed(2)),
-      currency: currentModel.currency || 'POINTS',
-      breakdown: {},
-      note: '实际扣费以生成结果为准'
-    }
-    return
-  }
-
-  console.log('[价格估算] 模型无本地价格字段，走后端估算接口:', JSON.stringify(requestParams))
-  console.log('[价格估算] currentModel 关键字段:', {
-    id: currentModel.id, name: currentModel.name,
-    price_per_request: currentModel.price_per_request,
-    price_per_second: currentModel.price_per_second,
-    price_tiers: currentModel.price_tiers,
-    price_multiplier: currentModel.price_multiplier
-  })
+  console.log('[价格估算] 请求后端估算接口:', JSON.stringify(requestParams))
 
   estimatingPrice.value = true
   try {
@@ -3796,23 +3766,7 @@ function buildGenerateRequest() {
   else if (selectedType.value === 'digital-human') outputType = 'digital_human'
   else outputType = 'video'
 
-  // 如果模型有分辨率变体，根据用户选择的分辨率自动切换到对应的模型ID
-  let submitModelValue
-  if (currentModel._hasResolutionVariants && currentModel._resolutionVariants) {
-    const targetRes = String(selectedQuality.value || '').toLowerCase()
-    const variantModelId = currentModel._resolutionVariants[targetRes]
-    if (variantModelId) {
-      submitModelValue = String(variantModelId).trim()
-      console.log(`📐 分辨率变体自动切换: "${currentModel.name}" → ${targetRes} → model="${variantModelId}"`)
-    } else {
-      // 找不到对应分辨率的变体，使用默认（第一个变体或原始ID）
-      const firstVariant = Object.values(currentModel._resolutionVariants)[0]
-      submitModelValue = String(firstVariant || currentModel.id || '').trim()
-      console.warn(`⚠️ 模型 "${currentModel.name}" 无 ${targetRes} 分辨率变体，使用默认: "${submitModelValue}"`)
-    }
-  } else {
-    submitModelValue = String(currentModel.id || '').trim()
-  }
+  const submitModelValue = getBusinessModelId(currentModel)
   const hasAtReferences = referencedFiles.value.length > 0
 
   let allInputFiles
@@ -3856,6 +3810,8 @@ function buildGenerateRequest() {
   } else {
     allInputFiles = [...uploadedFiles.value]
   }
+
+  validateReferenceLimits(allInputFiles)
 
   const uiFeature = selectedFeature.value || ''
 
@@ -3927,14 +3883,11 @@ function buildGenerateRequest() {
     parameters: {},
     prompt: finalPrompt,
     input_files: allInputFiles.map((f) => {
-      const item = {
+      return {
         type: String(f.type || 'image'), url: String(f.url || ''),
         purpose: String(f.purpose || 'reference'),
         object_id: String(f.object_id || `file_${f.type}_${Math.random().toString(36).slice(2, 6)}`)
       }
-      // Seedance 素材库引用：透传 media_id（见 SEEDANCE_RESOURCE_LIBRARY.md §2/§3）
-      if (f.media_id) item.media_id = String(f.media_id)
-      return item
     })
   }
 
@@ -3947,7 +3900,7 @@ function buildGenerateRequest() {
     }
 
     // GPT图像模型专属参数
-    const modelIdLower = apiModelId.toLowerCase()
+    const modelIdLower = getModelIdentity(currentModel)
     if (modelIdLower.includes('gpt-image') || modelIdLower.includes('chatgpt-image') || modelIdLower.includes('dall-e')) {
       request.parameters.quality = imageOutputQuality.value
       request.parameters.output_format = imageOutputFormat.value
@@ -3989,22 +3942,20 @@ function buildGenerateRequest() {
       ratio: params.ratio
     }
 
-    // 仅在模型支持音频开关(free 模式)时发送 sound/audio_generation 参数
-    // forced-sound 模型(如 happyhorse)原生有声：后端会按模型默认行为处理，
-    //   发送 sound=true 反而会触发后端 supports_audio 校验并拒绝
-    // disabled-silent 模型不支持音频，也不发送
+    // PR-4.11：所有视频请求都显式传 audio_generation，确保生成与计价使用同一音频档位。
     const modelSoundMode = currentModel.sound_mode || soundToggleMode.value
+    const audioGeneration = modelSoundMode === 'free' && videoSoundEnabled.value
     console.log('🔊 音频参数判断:', {
       modelId: currentModel.id,
       modelName: currentModel.name,
       sound_mode: currentModel.sound_mode,
       soundToggleMode: soundToggleMode.value,
       videoSoundEnabled: videoSoundEnabled.value,
-      willSendAudio: modelSoundMode === 'free'
+      audioGeneration
     })
+    request.parameters.audio_generation = audioGeneration
     if (modelSoundMode === 'free') {
-      request.parameters.sound = videoSoundEnabled.value
-      request.parameters.audio_generation = videoSoundEnabled.value
+      request.parameters.sound = audioGeneration
     }
 
     const modelIdLower = apiModelId.toLowerCase()
@@ -4012,7 +3963,7 @@ function buildGenerateRequest() {
 
     // Seedance 2.0 专属参数
     if (isSeedance) {
-      request.parameters.generate_audio = videoSoundEnabled.value
+      request.parameters.generate_audio = audioGeneration
       request.parameters.watermark = false
     }
 
@@ -4057,8 +4008,6 @@ function buildGenerateRequest() {
       request.parameters.references = allInputFiles.map(f => {
         const ref = { url: f.url, type: f.type || 'image' }
         if (f.object_id) ref.object_id = f.object_id
-        // Seedance 素材库引用：透传 media_id，后端会用 Asset://tkres_xxx 改写（见 SEEDANCE_RESOURCE_LIBRARY.md §2/§3）
-        if (f.media_id) ref.media_id = f.media_id
         // 根据 purpose 推断 role
         if (f.purpose === 'first_frame') ref.role = 'first_frame'
         else if (f.purpose === 'last_frame') ref.role = 'last_frame'
@@ -4074,8 +4023,6 @@ function buildGenerateRequest() {
   if (request.vendor === 'vendor_b' && allInputFiles.length > 0) {
     request.input = { media: allInputFiles.map((file, index) => {
       const media = { type: String(file.type || 'image'), url: String(file.url || ''), purpose: String(file.purpose || 'reference'), object_id: String(file.object_id || `media_${index + 1}`) }
-      // Seedance 素材库引用：透传 media_id（见 SEEDANCE_RESOURCE_LIBRARY.md §2/§3）
-      if (file.media_id) media.media_id = String(file.media_id)
       // 添加 role 字段（Seedance 2.0 多模态参考）
       if (file.purpose === 'first_frame') media.role = 'first_frame'
       else if (file.purpose === 'last_frame') media.role = 'last_frame'
@@ -4378,7 +4325,9 @@ async function handleGenerate() {
         quality: placeholderCard.quality,
         duration: placeholderCard.duration,
         type: placeholderCard.type,
-        prompt: placeholderCard.prompt
+        prompt: placeholderCard.prompt,
+        status: 'processing',
+        createdAt: placeholderCard.createdAt
       })
     }
 
@@ -4428,10 +4377,20 @@ async function handleGenerate() {
  *
  * @param {{ taskId: string, convId: string, cardId: number, cardType: string }} opts
  */
-async function pollTaskUntilDone({ taskId, convId, cardId, cardType }) {
+const activeTaskPolls = new Map()
+
+function pollTaskUntilDone(opts) {
+  const taskKey = String(opts.taskId)
+  if (activeTaskPolls.has(taskKey)) return activeTaskPolls.get(taskKey)
+  const pollPromise = runTaskPoll(opts).finally(() => activeTaskPolls.delete(taskKey))
+  activeTaskPolls.set(taskKey, pollPromise)
+  return pollPromise
+}
+
+async function runTaskPoll({ taskId, convId, cardId, cardType }) {
   const POLL_INTERVAL_MS = 5000        // 每 5 秒轮询一次
   const MAX_POLL_DURATION_MS = 20 * 60 * 1000  // 硬性 20 分钟超时（按实际经过时间计算，不受 API 耗时影响）
-  const MAX_CONSECUTIVE_ERRORS = 3     // 连续查询失败 3 次（15s）就标 failed，避免任务被后端清理后还一直转圈
+  const MAX_CONSECUTIVE_ERRORS = 3     // 连续查询失败 3 次后暂停同步；网络异常不等同于业务失败
 
   // 终态失败：除 failed/error 外，cancelled/timeout/expired/aborted/refunded 等也按失败处理
   const FAILED_STATUSES = new Set(['failed', 'error', 'cancelled', 'canceled', 'timeout', 'timed_out', 'expired', 'aborted', 'refunded'])
@@ -4443,15 +4402,13 @@ async function pollTaskUntilDone({ taskId, convId, cardId, cardType }) {
   while (true) {
     // 硬性 20 分钟超时：无论后端返回什么状态，超过 20 分钟直接报错
     if (Date.now() - startTime >= MAX_POLL_DURATION_MS) {
-      console.error(`⏰ 轮询超时（20 分钟）: task=${taskId}`)
+      console.warn(`⏰ 前端暂停轮询（20 分钟）: task=${taskId}`)
       const timeoutConv = conversationHistory.value.find(c => c.id === convId)
       const timeoutCard = timeoutConv?.cards.find(c => c.id === cardId)
       if (timeoutCard) {
-        timeoutCard.status = 'failed'
-        timeoutCard.results = []
-        timeoutCard.progress = null
+        timeoutCard.syncState = 'paused'
       }
-      showToast('生成超时（超过 20 分钟未完成），请稍后重试', 'error')
+      showToast('任务仍可能在后台生成，返回页面后将继续同步', 'info')
       return
     }
 
@@ -4480,16 +4437,14 @@ async function pollTaskUntilDone({ taskId, convId, cardId, cardType }) {
         const elapsedSec = Math.round((Date.now() - startTime) / 1000)
         console.warn(`⏳ 轮询失败 (已轮询 ${elapsedSec}s, 连续失败 ${consecutiveErrors}/${MAX_CONSECUTIVE_ERRORS}):`, e?.message || e)
         if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
-          // 连续多次查询都失败（可能是后端持续不可达或任务被清理），强制标 failed
-          console.error(`❌ 轮询连续失败 ${consecutiveErrors} 次，强制标记 failed: task=${taskId}`)
-          const failConv = conversationHistory.value.find(c => c.id === convId)
-          const failCard = failConv?.cards.find(c => c.id === cardId)
-          if (failCard && failCard.status === 'generating') {
-            failCard.status = 'failed'
-            failCard.results = []
-            failCard.progress = null
+          // 网络或服务异常不等于业务失败，暂停本轮同步，页面重新可见时再恢复。
+          console.warn(`⚠️ 轮询连续失败 ${consecutiveErrors} 次，暂停同步: task=${taskId}`)
+          const interruptedConv = conversationHistory.value.find(c => c.id === convId)
+          const interruptedCard = interruptedConv?.cards.find(c => c.id === cardId)
+          if (interruptedCard && interruptedCard.status === 'generating') {
+            interruptedCard.syncState = 'interrupted'
           }
-          showToast('生成失败：无法查询任务状态', 'error')
+          showToast('暂时无法同步任务状态，返回页面后将自动重试', 'info')
           return
         }
         await sleep(POLL_INTERVAL_MS)
@@ -4506,6 +4461,7 @@ async function pollTaskUntilDone({ taskId, convId, cardId, cardType }) {
         failCard.results = []
         failCard.progress = null
       }
+      setCachedTaskStatus(convId, taskId, 'failed')
       showToast('生成失败：任务不存在', 'error')
       return
     }
@@ -4517,6 +4473,9 @@ async function pollTaskUntilDone({ taskId, convId, cardId, cardType }) {
 
     // 成功拿到响应：重置连续错误计数
     consecutiveErrors = 0
+    const syncedConv = conversationHistory.value.find(c => c.id === convId)
+    const syncedCard = syncedConv?.cards.find(c => c.id === cardId)
+    if (syncedCard) syncedCard.syncState = null
 
     const status = pollData.status
     const progress = typeof pollData.progress === 'number' ? pollData.progress : null
@@ -4566,6 +4525,7 @@ async function pollTaskUntilDone({ taskId, convId, cardId, cardType }) {
         failCard.results = []
         failCard.progress = null
       }
+      setCachedTaskStatus(convId, taskId, 'failed')
       const errMsg = humanizeSeedanceError(safeMessage(pollData.message ?? pollData.error, `生成失败（${status}）`))
       showToast(`生成失败: ${errMsg}`, 'error')
       return
@@ -4614,8 +4574,12 @@ async function finalizeGenerationSuccess({ taskId, result, convId, placeholderCa
       ratio: cacheCard.ratio,
       quality: cacheCard.quality,
       duration: cacheCard.duration,
-      type: cacheCard.type || cardType
+      type: cacheCard.type || cardType,
+      status: 'completed',
+      createdAt: cacheCard.createdAt
     })
+  } else {
+    setCachedTaskStatus(convId, taskId, 'completed')
   }
 
   // 扣费明细：异步轮询路径直接用 pollData.charge_info；同步路径走 getTaskChargeInfoApi
@@ -4696,6 +4660,7 @@ async function downloadResult(result, idx) {
 const fileHistory = ref([])
 
 function addFileFromHistory(file) {
+  if (!canAddReference(file.type)) return
   fileHistory.value.push(file)
   uploadedFiles.value.push({
     type: file.type,
@@ -5100,15 +5065,16 @@ async function _loadConversationDetailOnce(id, conv) {
         cards.push(card)
       }
       seenTaskIds.add(msg.result_task_id)
+      setCachedTaskStatus(id, msg.result_task_id, 'completed')
 
-      // 兜底：如果流式端点的 model_name 为 null（任务未关联或后端数据缺失），
-      // 异步从 billing 任务详情接口获取 model_name（不阻塞恢复流程）
+      // 兜底：流式端点未返回模型时，从 billing 任务详情获取展示名（不阻塞恢复流程）
       const modelTarget = cards[cards.length - 1]
       if (!modelTarget?.model && msg.result_task_id) {
         getBillingTaskDetailApi(msg.result_task_id).then(taskDetail => {
           if (isUnmounted.value) return
-          if (taskDetail?.model_name) {
-            modelTarget.model = taskDetail.model_name
+          const displayModel = getTaskDisplayModel(taskDetail)
+          if (displayModel) {
+            modelTarget.model = displayModel
             saveCardGenParams(id, msg.result_task_id, {
               model: modelTarget.model,
               feature: modelTarget.feature,
@@ -5191,7 +5157,7 @@ async function _loadConversationDetailOnce(id, conv) {
         status: 'generating',
         progress: null,
         loadingVideo: false,
-        createdAt: userMsg?.created_at || null,
+        createdAt: userMsg?.created_at || cachedParams?.createdAt || null,
         uploadedInputFiles: uploadedInputFiles
       }
       // 立即把 baseCard 同步加入 conv.cards（这样后续 finalize / pollTaskUntilDone 能按 id 找到）
@@ -5235,13 +5201,14 @@ async function _loadConversationDetailOnce(id, conv) {
     }
 
     // 如果 model 为空（后端消息不返回 model 字段，缓存也可能不存在），
-    // 从 billing 任务详情接口获取 model_name（后端 generation_tasks 表存储了 model 信息）
+    // 从 billing 任务详情接口获取模型展示名
     if (!baseCard.model && !taskMissing) {
       try {
         const taskDetail = await getBillingTaskDetailApi(taskId)
         if (isUnmounted.value) return false
-        if (taskDetail?.model_name) {
-          baseCard.model = taskDetail.model_name
+        const displayModel = getTaskDisplayModel(taskDetail)
+        if (displayModel) {
+          baseCard.model = displayModel
           // 同步写入缓存，避免下次刷新再次查询
           saveCardGenParams(id, taskId, {
             model: baseCard.model,
@@ -5290,6 +5257,7 @@ async function _loadConversationDetailOnce(id, conv) {
         baseCard.status = 'completed'
         baseCard.progress = null
       }
+      setCachedTaskStatus(id, taskId, 'completed')
       // 视频后处理（与 finalizeGenerationSuccess 一致）
       if (baseCard.results.some(r => r.type === 'video')) {
         processVideoResults(baseCard).catch(() => {})
@@ -5315,6 +5283,7 @@ async function _loadConversationDetailOnce(id, conv) {
         baseCard.results = []
         baseCard.progress = null
       }
+      setCachedTaskStatus(id, taskId, 'failed')
     } else if (taskStatus) {
       // 其他明确的状态（如 'pending' / 'processing' / 'queued'）：保留 generating，启动轮询
       if (typeof pollData?.progress === 'number' && baseCard.status === 'generating') {
@@ -5439,13 +5408,15 @@ function _prependCardsFromMessages(messages, conv, id) {
     }
     newCards.push(card)
     localCardByTaskId.set(card.taskId, card)
+    setCachedTaskStatus(id, msg.result_task_id, 'completed')
 
     // model 为空时异步从 billing 任务详情获取
     if (!card.model && msg.result_task_id) {
       getBillingTaskDetailApi(msg.result_task_id).then(taskDetail => {
         if (isUnmounted.value) return
-        if (taskDetail?.model_name) {
-          card.model = taskDetail.model_name
+        const displayModel = getTaskDisplayModel(taskDetail)
+        if (displayModel) {
+          card.model = displayModel
           saveCardGenParams(id, msg.result_task_id, {
             model: card.model,
             feature: card.feature,
@@ -5648,11 +5619,11 @@ function buildAttachmentsFromUserMsg(userMsg) {
 /**
  * 将 messages/stream 端点返回的 MessageStreamItem 归一化为卡片重建所需的格式。
  * 后端已在流式端点中补充了完整字段：content / generation_task_id / result_task_id /
- * created_at / duration / output_type / model_name（变体 ID）/ quality（实际值）。
+ * created_at / duration / output_type / model_name（展示名）/ quality（实际值）。
  *
  * 字段映射（兼容后端字段命名）：
  *   result_url → result_video_url（如果后端用 result_url 而非 result_video_url）
- *   model_name → model（后端现返回变体 model_id 而非 display_name）
+ *   model_name → model（PR-4.9 起返回 display_name）
  *   uploaded_image_url → attachments[{url}]（如果后端未返回 attachments 数组）
  *   result_task_id：优先用后端返回值，缺失时 fallback 到 message_id（仅 assistant）
  *   content：优先用后端返回值，缺失时 fallback 到空字符串
@@ -5665,7 +5636,7 @@ function _normalizeStreamItem(item) {
   if (item.result_url && !normalized.result_video_url) {
     normalized.result_video_url = item.result_url
   }
-  // model_name → model（后端现返回变体 model_id）
+  // model_name → model（PR-4.9 起为展示名）
   if (item.model_name && !normalized.model) {
     normalized.model = item.model_name
   }
@@ -5747,6 +5718,22 @@ function handleVisibilityChange() {
     // 如果已选模型，重新估算价格（管理员可能改了定价）
     if (selectedModel.value) {
       fetchEstimatedPrice()
+    }
+    resumeVisibleTaskPolling()
+  }
+}
+
+function resumeVisibleTaskPolling() {
+  for (const conv of conversationHistory.value) {
+    for (const card of conv.cards || []) {
+      if (card.status !== 'generating' || !card.taskId) continue
+      card.syncState = null
+      pollTaskUntilDone({
+        taskId: card.taskId,
+        convId: conv.id,
+        cardId: card.id,
+        cardType: card.type || 'image'
+      }).catch(err => console.error('恢复任务轮询异常:', err))
     }
   }
 }

@@ -75,7 +75,7 @@ export function saveSiteCustomizationApi(params) {
  * @returns {Promise} { estimated_cost, currency, breakdown, note }
  */
 export function estimatePriceApi(params) {
-  return billingEstimatePrice(params).then(data => ({ data }))
+  return billingEstimatePrice(params)
 }
 
 /**
