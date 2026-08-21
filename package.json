@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "test:smart-route": "node --test tests/modelRouting.test.js tests/modelCapabilities.test.js tests/generateView.ssr.test.js tests/lucideGuard.test.js",
     "preview": "vite preview"
   },
   "dependencies": {

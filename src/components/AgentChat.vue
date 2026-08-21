@@ -83,13 +83,56 @@
 
         <!-- ===== 聊天视图 ===== -->
         <template v-else>
-        <!-- Agent 选择器 -->
-        <div v-if="agents.length > 1" class="agent-picker">
-          <select v-model="currentAgentId" class="agent-select" :disabled="loading" @change="resetConversation">
-            <option v-for="a in agents" :key="a.agent_id" :value="a.agent_id">
-              {{ a.display_name || a.agent_id }}
-            </option>
-          </select>
+        <!-- Agent 模型切换 -->
+        <div class="agent-picker">
+          <button
+            type="button"
+            class="agent-model-trigger"
+            :class="{ active: showAgentMenu }"
+            :disabled="loading"
+            :aria-expanded="showAgentMenu"
+            aria-haspopup="listbox"
+            title="切换模型"
+            @click="showAgentMenu = !showAgentMenu"
+          >
+            <span class="agent-model-icon">
+              <LucideIcon name="bot" svgStyle="width: 15px; height: 15px;" />
+            </span>
+            <span class="agent-model-copy">
+              <span class="agent-model-label">当前模型</span>
+              <span class="agent-model-name">{{ currentAgentLabel }}</span>
+            </span>
+            <span v-if="currentAgentSupportsImages" class="agent-model-capability">图像</span>
+            <LucideIcon name="chevron-down" svgStyle="width: 15px; height: 15px;" />
+          </button>
+
+          <div v-if="showAgentMenu" class="agent-model-menu" role="listbox" aria-label="选择智能体模型">
+            <div v-if="agentsLoading" class="agent-model-empty">正在加载模型…</div>
+            <div v-else-if="agents.length === 0" class="agent-model-empty">暂无可用模型</div>
+            <template v-else>
+              <button
+                v-for="agent in agents"
+                :key="agent.agent_id"
+                type="button"
+                role="option"
+                class="agent-model-option"
+                :class="{ selected: agent.agent_id === currentAgentId }"
+                :aria-selected="agent.agent_id === currentAgentId"
+                @click="selectAgent(agent)"
+              >
+                <span class="agent-model-option-main">
+                  <span class="agent-model-option-name">{{ agent.display_name || agent.agent_id }}</span>
+                  <span class="agent-model-option-id">{{ agent.agent_id }}</span>
+                </span>
+                <span v-if="agent.supports_images" class="agent-model-capability">图像</span>
+                <LucideIcon
+                  v-if="agent.agent_id === currentAgentId"
+                  name="check"
+                  svgStyle="width: 15px; height: 15px;"
+                />
+              </button>
+            </template>
+          </div>
         </div>
 
         <!-- 消息列表 -->
@@ -106,7 +149,18 @@
             <span v-if="msg.role === 'assistant'" class="agent-msg-avatar">
               <LucideIcon name="sparkles" svgStyle="width: 14px; height: 14px;" />
             </span>
-            <div v-if="msg.content" class="agent-msg-bubble">{{ msg.content }}</div>
+            <div class="agent-msg-body">
+              <div v-if="msg.content" class="agent-msg-bubble">{{ msg.content }}</div>
+              <div v-if="msg.images?.length" class="agent-msg-images">
+                <img
+                  v-for="image in msg.images"
+                  :key="image.id || image.previewUrl"
+                  :src="image.previewUrl"
+                  :alt="image.name || '对话图片'"
+                  class="agent-msg-image"
+                />
+              </div>
+            </div>
           </div>
           <!-- 正在输入指示 -->
           <div v-if="loading" class="agent-msg agent-msg-assistant">
@@ -131,8 +185,98 @@
           >{{ s }}</button>
         </div>
 
+        <transition name="agent-tools">
+          <div v-if="showToolPanel" class="agent-tool-panel" aria-label="更多功能">
+            <button
+              type="button"
+              class="agent-tool-item"
+              :disabled="!currentAgentSupportsImages || loading || attachments.length >= MAX_IMAGES"
+              @click="openImagePicker"
+            >
+              <span class="agent-tool-icon">
+                <LucideIcon name="image-plus" svgStyle="width: 20px; height: 20px;" />
+              </span>
+              <span class="agent-tool-copy">
+                <span class="agent-tool-name">上传图片</span>
+                <span class="agent-tool-hint">JPEG、PNG、WebP</span>
+              </span>
+            </button>
+            <button
+              v-if="currentAgentSupportsImages"
+              type="button"
+              class="agent-tool-item agent-tool-item-secondary"
+              :disabled="loading || attachments.length >= MAX_IMAGES"
+              @click="toggleUrlForm"
+            >
+              <span class="agent-tool-icon">
+                <LucideIcon name="link" svgStyle="width: 19px; height: 19px;" />
+              </span>
+              <span class="agent-tool-copy">
+                <span class="agent-tool-name">图片链接</span>
+                <span class="agent-tool-hint">HTTPS 地址</span>
+              </span>
+            </button>
+            <span v-if="!currentAgentSupportsImages" class="agent-tool-disabled-note">
+              当前模型不支持图片
+            </span>
+          </div>
+        </transition>
+
+        <div v-if="attachments.length || showUrlForm || attachmentError" class="agent-attachment-area">
+          <div v-if="attachments.length" class="agent-attachment-list">
+            <div v-for="attachment in attachments" :key="attachment.id" class="agent-attachment-item">
+              <img :src="attachment.previewUrl" :alt="attachment.name || '待发送图片'" />
+              <button
+                type="button"
+                class="agent-attachment-remove"
+                :aria-label="`移除${attachment.name || '图片'}`"
+                @click="removeAttachment(attachment.id)"
+              >
+                <LucideIcon name="x" svgStyle="width: 12px; height: 12px;" />
+              </button>
+            </div>
+          </div>
+          <form v-if="showUrlForm" class="agent-url-form" @submit.prevent="addUrlAttachment">
+            <input
+              ref="urlInputRef"
+              v-model="imageUrlDraft"
+              type="url"
+              class="agent-url-input"
+              placeholder="https://example.com/image.png"
+              aria-label="图片 HTTPS 地址"
+            />
+            <select v-model="imageUrlMediaType" class="agent-url-type" aria-label="图片类型">
+              <option value="image/jpeg">JPEG</option>
+              <option value="image/png">PNG</option>
+              <option value="image/webp">WebP</option>
+            </select>
+            <button type="submit" class="agent-url-add">添加</button>
+          </form>
+          <div v-if="attachmentError" class="agent-attachment-error" role="alert">{{ attachmentError }}</div>
+        </div>
+
         <!-- 输入区 -->
         <footer class="agent-input-wrap">
+          <input
+            ref="imageInputRef"
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            multiple
+            class="agent-file-input"
+            @change="selectImageFiles"
+          />
+          <button
+            type="button"
+            class="agent-plus-btn"
+            :class="{ active: showToolPanel }"
+            :disabled="loading"
+            :aria-expanded="showToolPanel"
+            aria-label="展开更多功能"
+            title="更多功能"
+            @click="toggleToolPanel"
+          >
+            <LucideIcon name="plus" svgStyle="width: 19px; height: 19px;" />
+          </button>
           <textarea
             ref="inputRef"
             v-model="draft"
@@ -145,7 +289,7 @@
           ></textarea>
           <button
             class="agent-send-btn"
-            :disabled="!draft.trim() || loading"
+            :disabled="(!draft.trim() && !attachments.length) || loading"
             @click="send()"
             title="发送"
             aria-label="发送"
@@ -192,6 +336,21 @@ const draft = ref('')
 const loading = ref(false)
 const messagesRef = ref(null)
 const inputRef = ref(null)
+const imageInputRef = ref(null)
+const urlInputRef = ref(null)
+
+const MAX_IMAGES = 5
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024
+const SUPPORTED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
+let attachmentId = 0
+const attachments = ref([])
+const attachmentError = ref('')
+const showUrlForm = ref(false)
+const showToolPanel = ref(false)
+const showAgentMenu = ref(false)
+const agentsLoading = ref(false)
+const imageUrlDraft = ref('')
+const imageUrlMediaType = ref('image/jpeg')
 
 // 视图：chat 聊天 / history 历史列表
 const view = ref('chat')
@@ -220,6 +379,14 @@ const showSuggestions = ref(true)
 // Agent 列表与当前选择
 const agents = ref([])
 const currentAgentId = ref(import.meta.env.VITE_AGENT_DEFAULT_ID || 'deepseek-text')
+const currentAgentSupportsImages = computed(() => {
+  return agents.value.find(agent => agent.agent_id === currentAgentId.value)?.supports_images === true
+})
+const currentAgentLabel = computed(() => {
+  if (agentsLoading.value) return '加载中…'
+  const current = agents.value.find(agent => agent.agent_id === currentAgentId.value)
+  return current?.display_name || current?.agent_id || currentAgentId.value || '未选择模型'
+})
 
 // 当前服务端会话与隔离身份
 const conversationId = ref(null)
@@ -264,11 +431,30 @@ function formatTime(ts) {
  * 从服务端消息结构提取可展示文本
  */
 function messageText(content) {
+  if (!content) return ''
   if (typeof content === 'string') return content
   if (Array.isArray(content)) {
     return content.map(part => part?.text || '').filter(Boolean).join('\n')
   }
   return content?.text || messageText(content?.content) || ''
+}
+
+function messageImages(content) {
+  if (!content) return []
+  const parts = Array.isArray(content) ? content : (Array.isArray(content.content) ? content.content : [])
+  return parts.flatMap((part, index) => {
+    if (part?.type === 'image_url' && part.url) {
+      return [{ id: `url-${index}-${part.url}`, previewUrl: part.url, name: '链接图片' }]
+    }
+    if (part?.type === 'image_base64' && part.data && SUPPORTED_IMAGE_TYPES.has(part.media_type)) {
+      return [{
+        id: `base64-${index}`,
+        previewUrl: `data:${part.media_type};base64,${part.data}`,
+        name: '上传图片'
+      }]
+    }
+    return []
+  })
 }
 
 /**
@@ -317,8 +503,10 @@ async function switchConversation(item) {
     messages.value = serverMessages.map(m => ({
       id: m.id || m.message_id || ++msgId,
       role: m.role,
-      content: messageText(m.content ?? m.message)
+      content: messageText(m.content ?? m.message),
+      images: messageImages(m.content ?? m.message)
     }))
+    clearAttachments()
     showSuggestions.value = messages.value.every(m => m.role !== 'user')
     view.value = 'chat'
     nextTick(() => { scrollToBottom(); inputRef.value?.focus() })
@@ -385,6 +573,120 @@ function ensureIdentity() {
   tenantId.value = user.enterprise_id || user.user_id || 'default-tenant'
 }
 
+function nextAttachmentId() {
+  attachmentId += 1
+  return `image-${Date.now()}-${attachmentId}`
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result || ''))
+    reader.onerror = () => reject(new Error(`读取图片“${file.name}”失败`))
+    reader.readAsDataURL(file)
+  })
+}
+
+async function selectImageFiles(event) {
+  showToolPanel.value = false
+  attachmentError.value = ''
+  const files = Array.from(event.target.files || [])
+  event.target.value = ''
+  const available = MAX_IMAGES - attachments.value.length
+  if (files.length > available) {
+    attachmentError.value = `最多发送 ${MAX_IMAGES} 张图片，本次仅添加前 ${available} 张。`
+  }
+
+  for (const file of files.slice(0, available)) {
+    if (!SUPPORTED_IMAGE_TYPES.has(file.type)) {
+      attachmentError.value = '仅支持 JPEG、PNG、WebP 图片。'
+      continue
+    }
+    if (file.size > MAX_IMAGE_BYTES) {
+      attachmentError.value = `图片“${file.name}”超过 10 MiB。`
+      continue
+    }
+    try {
+      const dataUrl = await readFileAsDataUrl(file)
+      const data = dataUrl.slice(dataUrl.indexOf(',') + 1)
+      attachments.value.push({
+        id: nextAttachmentId(),
+        kind: 'base64',
+        data,
+        mediaType: file.type,
+        previewUrl: dataUrl,
+        name: file.name
+      })
+    } catch (error) {
+      attachmentError.value = error.message
+    }
+  }
+}
+
+function toggleToolPanel() {
+  showToolPanel.value = !showToolPanel.value
+  attachmentError.value = ''
+  if (showToolPanel.value) showUrlForm.value = false
+}
+
+function openImagePicker() {
+  if (!currentAgentSupportsImages.value || attachments.value.length >= MAX_IMAGES) return
+  showToolPanel.value = false
+  imageInputRef.value?.click()
+}
+
+function toggleUrlForm() {
+  showToolPanel.value = false
+  showUrlForm.value = !showUrlForm.value
+  attachmentError.value = ''
+  if (showUrlForm.value) nextTick(() => urlInputRef.value?.focus())
+}
+
+function addUrlAttachment() {
+  attachmentError.value = ''
+  if (attachments.value.length >= MAX_IMAGES) {
+    attachmentError.value = `最多发送 ${MAX_IMAGES} 张图片。`
+    return
+  }
+
+  let url
+  try {
+    url = new URL(imageUrlDraft.value.trim())
+  } catch {
+    attachmentError.value = '请输入有效的图片地址。'
+    return
+  }
+  if (url.protocol !== 'https:') {
+    attachmentError.value = '图片链接必须使用 HTTPS。'
+    return
+  }
+
+  attachments.value.push({
+    id: nextAttachmentId(),
+    kind: 'url',
+    url: url.toString(),
+    mediaType: imageUrlMediaType.value,
+    previewUrl: url.toString(),
+    name: '链接图片'
+  })
+  imageUrlDraft.value = ''
+  showUrlForm.value = false
+}
+
+function removeAttachment(id) {
+  attachments.value = attachments.value.filter(attachment => attachment.id !== id)
+  attachmentError.value = ''
+}
+
+function clearAttachments() {
+  attachments.value = []
+  attachmentError.value = ''
+  showToolPanel.value = false
+  showUrlForm.value = false
+  imageUrlDraft.value = ''
+  if (imageInputRef.value) imageInputRef.value.value = ''
+}
+
 /**
  * 获取 Agent 列表（仅获取一次）
  */
@@ -392,6 +694,7 @@ let agentsLoaded = false
 async function fetchAgentsOnce() {
   if (agentsLoaded) return
   agentsLoaded = true
+  agentsLoading.value = true
   try {
     const res = await listAgentsApi()
     agents.value = (res.agents || []).filter(a => a.configured)
@@ -400,8 +703,18 @@ async function fetchAgentsOnce() {
       currentAgentId.value = agents.value[0].agent_id
     }
   } catch (e) {
+    agentsLoaded = false
     agentError.value = `获取模型列表失败：${e.message}`
+  } finally {
+    agentsLoading.value = false
   }
+}
+
+function selectAgent(agent) {
+  showAgentMenu.value = false
+  if (!agent || agent.agent_id === currentAgentId.value) return
+  currentAgentId.value = agent.agent_id
+  resetConversation()
 }
 
 let historyLoaded = false
@@ -421,8 +734,10 @@ async function fetchHistoryOnce() {
  */
 function resetConversation() {
   if (loading.value) return
+  showAgentMenu.value = false
   conversationId.value = null
   currentHistoryId.value = null
+  clearAttachments()
   messages.value = [
     { id: ++msgId, role: 'assistant', content: '新对话已开始，请问需要什么帮助？' }
   ]
@@ -448,7 +763,7 @@ async function ensureConversation() {
 
 async function send(text) {
   const content = (text ?? draft.value).trim()
-  if (!content || loading.value) return
+  if ((!content && attachments.value.length === 0) || loading.value) return
 
   ensureIdentity()
 
@@ -462,31 +777,59 @@ async function send(text) {
     return
   }
 
+  const outgoingAttachments = attachments.value.map(attachment => ({ ...attachment }))
   showSuggestions.value = false
-  messages.value.push({ id: ++msgId, role: 'user', content })
+  messages.value.push({
+    id: ++msgId,
+    role: 'user',
+    content,
+    images: outgoingAttachments.map(attachment => ({
+      id: attachment.id,
+      previewUrl: attachment.previewUrl,
+      name: attachment.name
+    }))
+  })
   draft.value = ''
+  clearAttachments()
   nextTick(autoGrow)
   scrollToBottom()
 
-  await streamChat(content)
+  await streamChat(content, outgoingAttachments)
 }
 
 /**
  * 调用平台会话流式接口并渲染回复
  */
-async function streamChat(userContent) {
+async function streamChat(userContent, outgoingAttachments) {
   // 提前插入一条空的 assistant 消息，用于流式追加
   const assistantMsg = ref({ id: ++msgId, role: 'assistant', content: '' })
   messages.value.push(assistantMsg.value)
   scrollToBottom()
 
   const requestId = genRequestId()
+  const messageParts = []
+  if (userContent) messageParts.push({ type: 'text', text: userContent })
+  for (const attachment of outgoingAttachments) {
+    if (attachment.kind === 'url') {
+      messageParts.push({
+        type: 'image_url',
+        url: attachment.url,
+        media_type: attachment.mediaType
+      })
+    } else {
+      messageParts.push({
+        type: 'image_base64',
+        data: attachment.data,
+        media_type: attachment.mediaType
+      })
+    }
+  }
   const payload = {
     request_id: requestId,
     tenant_id: tenantId.value,
     user_id: userId.value,
     message: {
-      content: [{ type: 'text', text: userContent }]
+      content: messageParts
     }
   }
 
@@ -525,6 +868,14 @@ async function streamChat(userContent) {
 }
 
 function onKeydown(e) {
+  if (e.key === 'Escape' && showAgentMenu.value) {
+    showAgentMenu.value = false
+    return
+  }
+  if (e.key === 'Escape' && showToolPanel.value) {
+    showToolPanel.value = false
+    return
+  }
   if (e.key === 'Escape' && open.value) {
     open.value = false
   }
@@ -825,26 +1176,135 @@ onBeforeUnmount(() => {
 
 /* ====== Agent 选择器 ====== */
 .agent-picker {
+  position: relative;
   padding: 8px 12px;
   background: rgba(255, 255, 255, 0.7);
   border-bottom: 1px solid var(--border-light);
   flex-shrink: 0;
+  z-index: 3;
 }
 
-.agent-select {
+.agent-model-trigger {
   width: 100%;
-  padding: 6px 10px;
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 9px;
   border: 1px solid var(--border-light);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: #fff;
   color: var(--text-primary);
-  font-size: 12px;
-  outline: none;
   cursor: pointer;
+  text-align: left;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
-.agent-select:focus {
-  border-color: var(--ac-blue);
+.agent-model-trigger:hover:not(:disabled),
+.agent-model-trigger.active,
+.agent-model-trigger:focus-visible {
+  border-color: rgba(var(--ac-blue-rgb), 0.55);
+  box-shadow: 0 0 0 3px rgba(var(--ac-blue-rgb), 0.08);
+  outline: none;
+}
+
+.agent-model-trigger:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.agent-model-icon {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 28px;
+  border-radius: 8px;
+  background: rgba(var(--ac-blue-rgb), 0.1);
+  color: var(--ac-blue);
+}
+
+.agent-model-copy,
+.agent-model-option-main {
+  min-width: 0;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+}
+
+.agent-model-label,
+.agent-model-option-id {
+  color: var(--text-tertiary);
+  font-size: 10px;
+  line-height: 1.2;
+}
+
+.agent-model-name,
+.agent-model-option-name {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-model-capability {
+  flex-shrink: 0;
+  padding: 2px 6px;
+  border-radius: 10px;
+  background: rgba(var(--ac-blue-rgb), 0.1);
+  color: var(--ac-blue-dark);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.agent-model-menu {
+  position: absolute;
+  top: calc(100% - 4px);
+  right: 12px;
+  left: 12px;
+  max-height: 220px;
+  padding: 5px;
+  overflow-y: auto;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: #fff;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.16);
+}
+
+.agent-model-option {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  text-align: left;
+}
+
+.agent-model-option:hover,
+.agent-model-option:focus-visible,
+.agent-model-option.selected {
+  background: rgba(var(--ac-blue-rgb), 0.08);
+  outline: none;
+}
+
+.agent-model-option.selected {
+  color: var(--ac-blue);
+}
+
+.agent-model-empty {
+  padding: 14px 10px;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  text-align: center;
 }
 
 /* ====== 消息列表 ====== */
@@ -912,6 +1372,35 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+}
+
+.agent-msg-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  max-width: calc(100% - 30px);
+}
+
+.agent-msg-user .agent-msg-body {
+  align-items: flex-end;
+}
+
+.agent-msg-images {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 96px));
+  gap: 5px;
+  overflow: hidden;
+}
+
+.agent-msg-image {
+  width: 96px;
+  height: 96px;
+  display: block;
+  object-fit: cover;
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  background: var(--bg-tertiary);
 }
 
 .agent-msg-bubble {
@@ -1003,6 +1492,201 @@ onBeforeUnmount(() => {
 }
 
 /* ====== 输入区 ====== */
+.agent-tool-panel {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.92);
+  border-top: 1px solid var(--border-light);
+  flex-shrink: 0;
+}
+
+.agent-tool-item {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  flex: 1;
+  gap: 8px;
+  padding: 9px;
+  border: 1px solid rgba(var(--ac-blue-rgb), 0.2);
+  border-radius: 10px;
+  background: rgba(var(--ac-blue-rgb), 0.06);
+  color: var(--text-primary);
+  cursor: pointer;
+  text-align: left;
+  transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+}
+
+.agent-tool-item-secondary {
+  border-color: var(--border-light);
+  background: #fff;
+}
+
+.agent-tool-item:hover:not(:disabled),
+.agent-tool-item:focus-visible {
+  border-color: rgba(var(--ac-blue-rgb), 0.45);
+  background: rgba(var(--ac-blue-rgb), 0.1);
+  outline: none;
+  transform: translateY(-1px);
+}
+
+.agent-tool-item:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
+.agent-tool-icon {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 32px;
+  border-radius: 9px;
+  background: #fff;
+  color: var(--ac-blue);
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.08);
+}
+
+.agent-tool-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.agent-tool-name {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.agent-tool-hint,
+.agent-tool-disabled-note {
+  color: var(--text-tertiary);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.agent-tool-disabled-note {
+  align-self: center;
+  flex: 1;
+}
+
+.agent-tools-enter-active,
+.agent-tools-leave-active {
+  transition: opacity 0.18s ease, transform 0.18s ease;
+  transform-origin: bottom center;
+}
+
+.agent-tools-enter-from,
+.agent-tools-leave-to {
+  opacity: 0;
+  transform: translateY(8px) scale(0.98);
+}
+
+.agent-attachment-area {
+  padding: 8px 12px 0;
+  background: rgba(255, 255, 255, 0.7);
+  border-top: 1px solid var(--border-light);
+  flex-shrink: 0;
+}
+
+.agent-attachment-list {
+  display: flex;
+  gap: 7px;
+  overflow-x: auto;
+  padding-bottom: 6px;
+}
+
+.agent-attachment-item {
+  position: relative;
+  width: 52px;
+  height: 52px;
+  flex: 0 0 52px;
+  border: 1px solid var(--border-light);
+  border-radius: 9px;
+  overflow: visible;
+  background: var(--bg-tertiary);
+}
+
+.agent-attachment-item img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+  border-radius: 8px;
+}
+
+.agent-attachment-remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: #374151;
+  color: #fff;
+  cursor: pointer;
+}
+
+.agent-url-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 6px;
+  padding-bottom: 7px;
+}
+
+.agent-url-input,
+.agent-url-type {
+  min-width: 0;
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--border-light);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--text-primary);
+  font-size: 11px;
+  outline: none;
+}
+
+.agent-url-input:focus,
+.agent-url-type:focus,
+.agent-plus-btn:focus-visible,
+.agent-attachment-remove:focus-visible {
+  border-color: var(--ac-blue);
+  box-shadow: 0 0 0 3px rgba(var(--ac-blue-rgb), 0.12);
+}
+
+.agent-url-type {
+  width: 66px;
+  padding: 0 5px;
+}
+
+.agent-url-add {
+  height: 32px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 7px;
+  background: var(--ac-blue);
+  color: #fff;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.agent-attachment-error {
+  padding: 0 0 7px;
+  color: var(--error-color);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
 .agent-input-wrap {
   display: flex;
   align-items: flex-end;
@@ -1011,6 +1695,42 @@ onBeforeUnmount(() => {
   background: rgba(255, 255, 255, 0.7);
   border-top: 1px solid var(--border-light);
   flex-shrink: 0;
+}
+
+.agent-file-input {
+  display: none;
+}
+
+.agent-plus-btn {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: #fff;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: color 0.2s ease, border-color 0.2s ease, background 0.2s ease, transform 0.2s ease;
+}
+
+.agent-plus-btn:hover:not(:disabled),
+.agent-plus-btn.active {
+  border-color: rgba(var(--ac-blue-rgb), 0.35);
+  background: rgba(var(--ac-blue-rgb), 0.08);
+  color: var(--ac-blue);
+}
+
+.agent-plus-btn.active {
+  transform: rotate(45deg);
+}
+
+.agent-plus-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .agent-input {
@@ -1090,6 +1810,25 @@ onBeforeUnmount(() => {
   .agent-panel {
     height: min(620px, calc(100vh - 104px));
     max-width: calc(100vw - 32px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-panel-enter-active,
+  .agent-panel-leave-active,
+  .agent-tools-enter-active,
+  .agent-tools-leave-active,
+  .agent-fab,
+  .agent-model-trigger,
+  .agent-plus-btn,
+  .agent-tool-item,
+  .agent-send-btn {
+    transition-duration: 0.001ms !important;
+  }
+
+  .agent-typing-dot {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
   }
 }
 </style>

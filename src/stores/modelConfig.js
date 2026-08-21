@@ -63,9 +63,15 @@ export const useModelConfigStore = defineStore('modelConfig', () => {
     const allModels = [
       ...(modelConfig.value.image_models || []),
       ...(modelConfig.value.video_models || []),
+      ...(modelConfig.value.audio_models || []),
       ...(modelConfig.value.voices || [])
     ]
-    return allModels.find(m => m.model_id === modelId || m.id === modelId) || null
+    return allModels.find(m => {
+      if (m.model_id === modelId || m.id === modelId || m.business_model_id === modelId) return true
+      return Object.values(m.variants || {}).some(variant =>
+        Array.isArray(variant?.business_model_ids) && variant.business_model_ids.includes(modelId)
+      )
+    }) || null
   }
 
   function clearCache() {

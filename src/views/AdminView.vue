@@ -757,13 +757,20 @@
       <!-- ========== 模型新增/编辑弹窗 ========== -->
       <Teleport to="body">
         <div v-if="showModelModal" class="modal-overlay" @click.self="closeModelModal">
-          <div class="modal-container-add modal-xl">
-            <div class="modal-header">
-              <h3 class="modal-title">{{ editingModel ? '编辑模型' : '新增模型' }}</h3>
-              <button class="modal-close-btn" @click="closeModelModal"><i data-lucide="x" style="width: 18px; height: 18px;"></i></button>
+          <div class="modal-container-add modal-xl model-config-modal" role="dialog" aria-modal="true" :aria-label="editingModel ? '编辑模型' : '新增模型'">
+            <div class="modal-header model-config-header">
+              <div class="model-modal-heading">
+                <span class="model-modal-icon"><i data-lucide="cpu" style="width: 20px; height: 20px;"></i></span>
+                <div>
+                  <h3 class="modal-title">{{ editingModel ? '编辑模型配置' : '接入新模型' }}</h3>
+                  <p class="model-modal-subtitle">{{ editingModel ? `正在配置 ${editingModel.display_name || editingModel.model_id}` : '完善身份、路由、能力与计费信息' }}</p>
+                </div>
+              </div>
+              <button type="button" class="modal-close-btn" aria-label="关闭" @click="closeModelModal"><i data-lucide="x" style="width: 18px; height: 18px;"></i></button>
             </div>
-            <div class="modal-body">
+            <div class="modal-body model-config-body">
               <!-- 基础信息 -->
+              <section class="model-config-section">
               <h4 class="form-section-title"><i data-lucide="info" style="width: 14px; height: 14px;"></i> 基础信息</h4>
               <div class="form-row-2">
                 <div class="form-group">
@@ -795,13 +802,13 @@
               <div class="form-row-3">
                 <div class="form-group">
                   <label class="form-label">厂商 (vendor) <span class="required">*</span></label>
-                  <select v-model="modelForm.vendor" class="form-select">
+                  <select v-model="modelForm.vendor" class="form-select" :disabled="!!editingModel">
                     <option v-for="v in vendorOptions" :key="v.value" :value="v.value">{{ v.label }}</option>
                   </select>
                 </div>
                 <div class="form-group">
                   <label class="form-label">类型 (media_type) <span class="required">*</span></label>
-                  <select v-model="modelForm.media_type" class="form-select" @change="handleModelMediaTypeChange">
+                  <select v-model="modelForm.media_type" class="form-select" :disabled="!!editingModel" @change="handleModelMediaTypeChange">
                     <option v-for="t in mediaTypeOptions" :key="t.value" :value="t.value">{{ t.label }}</option>
                   </select>
                 </div>
@@ -814,8 +821,8 @@
               </div>
               <div class="form-row-2">
                 <div class="form-group">
-                  <label class="form-label">厂商展示名</label>
-                  <input type="text" v-model="modelForm.vendor_display_name" placeholder="例如 腾讯云 VOD" class="form-input">
+                  <label class="form-label">厂商展示名（可选覆盖）</label>
+                  <input type="text" v-model="modelForm.vendor_display_name" placeholder="留空则使用厂商名称" class="form-input">
                 </div>
                 <div class="form-group">
                   <label class="form-label">可用区域</label>
@@ -827,10 +834,12 @@
                 <textarea v-model="modelForm.description" placeholder="模型描述（后台自由文本）" class="form-textarea" rows="2"></textarea>
               </div>
               <div class="form-group">
-                <label class="form-label">标签（逗号分隔）</label>
-                <input type="text" v-model="modelForm.tagsText" placeholder="例如 高清,快速,VIP" class="form-input">
+                <label class="form-label">标签</label>
+                <TokenListInput v-model="modelForm.tags" placeholder="输入标签后按回车，例如：高清" />
               </div>
+              </section>
 
+              <section class="model-config-section">
               <h4 class="form-section-title"><i data-lucide="route" style="width: 14px; height: 14px;"></i> 上游路由</h4>
               <div class="form-row-2">
                 <div class="form-group">
@@ -850,26 +859,30 @@
               </div>
               <div class="form-group">
                 <div class="pricing-editor-header">
-                  <label class="form-label">分辨率上游路由 <span class="required">*</span></label>
-                  <button type="button" class="pricing-add-btn" @click="addKeyValueRow(modelForm.upstream_id_by_resolution)">+ 添加路由</button>
+                  <label class="form-label">分辨率上游优先级链 <span class="required">*</span></label>
+                  <button type="button" class="pricing-add-btn" @click="addResolutionConfigRow">+ 添加配置</button>
                 </div>
                 <div class="pricing-table-wrap">
-                  <table class="pricing-table route-table">
-                    <thead><tr><th>分辨率 / 尺寸键</th><th>上游模型 ID</th><th>操作</th></tr></thead>
+                  <table class="pricing-table resolution-config-table">
+                    <thead><tr><th>分辨率 / 尺寸键</th><th>用户可选</th><th>首选上游 ID（优先级 1）</th><th>回退上游 ID（优先级 2+）</th><th>操作</th></tr></thead>
                     <tbody>
-                      <tr v-for="(route, index) in modelForm.upstream_id_by_resolution" :key="index">
-                        <td><input v-model.trim="route.key" class="form-input" placeholder="例如 720P / default"></td>
-                        <td><input v-model.trim="route.value" class="form-input" placeholder="happyhorse-1.0-i2v-720p"></td>
-                        <td><button type="button" class="pricing-remove-btn" @click="removeKeyValueRow(modelForm.upstream_id_by_resolution, index)">删除</button></td>
+                      <tr v-for="(row, index) in modelForm.resolution_configs" :key="index">
+                        <td><input v-model.trim="row.key" class="form-input" placeholder="例如 720P / default"></td>
+                        <td><input type="checkbox" v-model="row.user_selectable"></td>
+                        <td><input v-model.trim="row.upstream_id" class="form-input" placeholder="首选上游模型 ID"></td>
+                        <td><TokenListInput v-model="row.variants" placeholder="按回退顺序输入 ID" /></td>
+                        <td><button type="button" class="pricing-remove-btn" @click="removeKeyValueRow(modelForm.resolution_configs, index)">删除</button></td>
                       </tr>
-                      <tr v-if="modelForm.upstream_id_by_resolution.length === 0"><td colspan="3" class="pricing-empty">暂无路由，请点击“添加路由”</td></tr>
+                      <tr v-if="modelForm.resolution_configs.length === 0"><td colspan="5" class="pricing-empty">暂无配置，请点击“添加配置”</td></tr>
                     </tbody>
                   </table>
                 </div>
-                <span class="form-hint-text">JSON 对象；键为分辨率/尺寸，值为上游私有 ID</span>
+                <span class="form-hint-text">首选 ID 写入优先级 1，回退 ID 按从左到右的顺序写入优先级 2、3……；default/all 等兜底行通常不勾选“用户可选”。</span>
               </div>
+              </section>
 
               <!-- 能力配置 -->
+              <section class="model-config-section">
               <h4 class="form-section-title"><i data-lucide="sliders-horizontal" style="width: 14px; height: 14px;"></i> 能力配置</h4>
               <div class="form-group">
                 <label class="form-label">支持特性 (supported_features)</label>
@@ -895,39 +908,15 @@
               </div>
               <div class="form-row-2">
                 <div class="form-group">
-                  <label class="form-label">支持分辨率（逗号分隔）</label>
-                  <input type="text" v-model="modelForm.supported_resolutions_text" placeholder="720P,1080P,2K,4K" class="form-input">
-                </div>
-                <div class="form-group">
-                  <label class="form-label">支持宽高比（逗号分隔）</label>
-                  <input type="text" v-model="modelForm.supported_aspect_ratios_text" placeholder="16:9,9:16,1:1" class="form-input">
+                  <label class="form-label">支持宽高比</label>
+                  <TokenListInput v-model="modelForm.supported_aspect_ratios" placeholder="输入比例后按回车，例如：16:9" />
                 </div>
               </div>
               <div class="form-group">
-                <div class="pricing-editor-header">
-                  <label class="form-label">分辨率候选上游 ID (resolution_variants)</label>
-                  <button type="button" class="pricing-add-btn" @click="addKeyValueRow(modelForm.resolution_variants)">+ 添加映射</button>
-                </div>
-                <div class="pricing-table-wrap">
-                  <table class="pricing-table route-table">
-                    <thead><tr><th>标准分辨率</th><th>候选上游私有 ID（按顺序回退）</th><th>操作</th></tr></thead>
-                    <tbody>
-                      <tr v-for="(row, index) in modelForm.resolution_variants" :key="index">
-                        <td><input v-model.trim="row.key" class="form-input" placeholder="例如 720P"></td>
-                        <td><input v-model="row.value" class="form-input" placeholder="主上游ID,备用上游ID"></td>
-                        <td><button type="button" class="pricing-remove-btn" @click="removeKeyValueRow(modelForm.resolution_variants, index)">删除</button></td>
-                      </tr>
-                      <tr v-if="modelForm.resolution_variants.length === 0"><td colspan="3" class="pricing-empty">暂无分辨率变体，点击“添加映射”新增</td></tr>
-                    </tbody>
-                  </table>
-                </div>
-                <span class="form-hint-text">保存为 JSON 映射，例如 {"720P":["main-720p","fallback-720p"]}；调用时按列表顺序回退。</span>
+                <label class="form-label">支持时长（秒；修改后最大值自动作为最大时长）</label>
+                <TokenListInput v-model="modelForm.supported_durations" numeric placeholder="输入秒数后按回车，例如：5" />
               </div>
-              <div class="form-group">
-                <label class="form-label">支持时长（秒，逗号分隔）</label>
-                <input type="text" v-model="modelForm.supported_durations_text" placeholder="5,10" class="form-input">
-              </div>
-              <div class="form-row-3">
+              <div class="form-row-2">
                 <div class="form-group">
                   <label class="form-label">最大宽度</label>
                   <input type="number" v-model.number="modelForm.max_width" placeholder="4096" class="form-input" min="256" max="4096">
@@ -935,10 +924,6 @@
                 <div class="form-group">
                   <label class="form-label">最大高度</label>
                   <input type="number" v-model.number="modelForm.max_height" placeholder="4096" class="form-input" min="256" max="4096">
-                </div>
-                <div class="form-group">
-                  <label class="form-label">最大时长(秒)</label>
-                  <input type="number" v-model.number="modelForm.max_duration" placeholder="10" class="form-input" min="1">
                 </div>
               </div>
               <div class="form-row-3">
@@ -955,61 +940,75 @@
                   <input type="number" v-model.number="modelForm.max_fps" placeholder="30" class="form-input" min="1" max="60">
                 </div>
               </div>
-              <div class="form-row-3">
-                <div class="form-group">
-                  <label class="form-label">最大参考图片数</label>
-                  <input type="number" v-model.number="modelForm.max_reference_images" class="form-input" min="0">
-                </div>
-                <div class="form-group">
-                  <label class="form-label">最大参考视频数</label>
-                  <input type="number" v-model.number="modelForm.max_reference_videos" class="form-input" min="0">
-                </div>
-                <div class="form-group">
-                  <label class="form-label">最大参考音频数</label>
-                  <input type="number" v-model.number="modelForm.max_reference_audios" class="form-input" min="0">
-                </div>
-              </div>
-              <div class="form-row-2">
-                <div class="form-group">
-                  <label class="form-label">是否需要输入素材</label>
-                  <select v-model="modelForm.requires_input" class="form-select">
-                    <option :value="null">自动推断</option>
-                    <option :value="true">是</option>
-                    <option :value="false">否</option>
-                  </select>
-                </div>
-                <div class="form-group">
-                  <label class="form-label">输入素材配额 (input_materials JSON)</label>
-                  <div class="pricing-table-wrap">
-                    <table class="pricing-table material-quota-table">
-                      <thead><tr><th>素材类型</th><th>最大数量</th></tr></thead>
-                      <tbody>
-                        <tr><td>图片 (image)</td><td><input type="number" v-model.number="modelForm.input_materials.image" min="0" step="1" class="form-input"></td></tr>
-                        <tr><td>视频 (video)</td><td><input type="number" v-model.number="modelForm.input_materials.video" min="0" step="1" class="form-input"></td></tr>
-                        <tr><td>音频 (audio)</td><td><input type="number" v-model.number="modelForm.input_materials.audio" min="0" step="1" class="form-input"></td></tr>
-                      </tbody>
-                    </table>
-                  </div>
-                  <span class="form-hint-text">填写每种输入素材允许的最大数量，0 表示不支持；保存时仍提交 JSON 对象。</span>
-                </div>
-              </div>
               <div class="form-group">
                 <label class="form-label">声音模式</label>
-                <select v-model="modelForm.sound_mode" class="form-select" @change="handleSoundModeChange">
+                <select v-model="modelForm.sound_mode" class="form-select">
                   <option :value="null">不适用（非视频模型）</option>
                   <option v-for="sm in soundModeOptions" :key="sm.value" :value="sm.value">{{ sm.label }}</option>
                 </select>
                 <span class="form-hint-text">仅视频模型有效</span>
               </div>
-              <div v-if="modelForm.media_type === 'video'" class="form-group">
-                <label class="checkbox-item">
-                  <input type="checkbox" v-model="modelForm.supports_audio" @change="handleSupportsAudioChange">
-                  <span>支持音频生成 (supports_audio)</span>
-                </label>
-                <span class="form-hint-text">开启后用户端可使用有声/无声切换</span>
-              </div>
+              </section>
+
+              <!-- 素材数量限制 -->
+              <section class="model-config-section material-limit-section">
+                <div class="material-limit-heading">
+                  <div>
+                    <h4 class="form-section-title"><i data-lucide="boxes" style="width: 14px; height: 14px;"></i> 素材数量限制</h4>
+                    <p>统一控制模型可接收的图片、视频和音频数量，并同步到用户生成页。</p>
+                  </div>
+                  <span class="material-sync-badge"><i data-lucide="refresh-cw" style="width: 12px; height: 12px;"></i> 前后端同步</span>
+                </div>
+                <div class="material-limit-grid">
+                  <label class="material-limit-card material-limit-image">
+                    <span class="material-limit-icon"><i data-lucide="image" style="width: 18px; height: 18px;"></i></span>
+                    <span class="material-limit-copy">
+                      <strong>图片素材</strong>
+                      <small>参考图、首尾帧等图片输入</small>
+                    </span>
+                    <span class="material-limit-input-wrap">
+                      <input type="number" v-model.number="modelForm.max_reference_images" class="form-input" min="0" step="1" inputmode="numeric" aria-label="图片素材最大数量" @input="modelForm.material_limits_changed = true">
+                      <span>个</span>
+                    </span>
+                  </label>
+                  <label class="material-limit-card material-limit-video">
+                    <span class="material-limit-icon"><i data-lucide="video" style="width: 18px; height: 18px;"></i></span>
+                    <span class="material-limit-copy">
+                      <strong>视频素材</strong>
+                      <small>动作、主体等视频参考输入</small>
+                    </span>
+                    <span class="material-limit-input-wrap">
+                      <input type="number" v-model.number="modelForm.max_reference_videos" class="form-input" min="0" step="1" inputmode="numeric" aria-label="视频素材最大数量" @input="modelForm.material_limits_changed = true">
+                      <span>个</span>
+                    </span>
+                  </label>
+                  <label class="material-limit-card material-limit-audio">
+                    <span class="material-limit-icon"><i data-lucide="music" style="width: 18px; height: 18px;"></i></span>
+                    <span class="material-limit-copy">
+                      <strong>音频素材</strong>
+                      <small>配音、音色等音频参考输入</small>
+                    </span>
+                    <span class="material-limit-input-wrap">
+                      <input type="number" v-model.number="modelForm.max_reference_audios" class="form-input" min="0" step="1" inputmode="numeric" aria-label="音频素材最大数量" @input="modelForm.material_limits_changed = true">
+                      <span>个</span>
+                    </span>
+                  </label>
+                </div>
+                <div class="material-limit-footer">
+                  <span class="material-limit-note"><i data-lucide="info" style="width: 13px; height: 13px;"></i> 0 表示不支持该类素材；生成页会在上传和提交时校验。</span>
+                  <label class="material-requirement-field">
+                    <span>是否必须输入素材</span>
+                    <select v-model="modelForm.requires_input" class="form-select">
+                      <option :value="null">自动推断</option>
+                      <option :value="true">是</option>
+                      <option :value="false">否</option>
+                    </select>
+                  </label>
+                </div>
+              </section>
 
               <!-- 积分定价配置 -->
+              <section class="model-config-section">
               <h4 class="form-section-title"><i data-lucide="badge-dollar-sign" style="width: 14px; height: 14px;"></i> 积分定价配置</h4>
               <div class="form-row-2">
                 <div class="form-group">
@@ -1048,22 +1047,28 @@
                     </tbody>
                   </table>
                 </div>
-                <span class="form-hint-text">视频模型每档必须同时填写静音和含音频单价；图片/音频保持一维单价。建议提供 default 兜底。</span>
+                <span class="form-hint-text">视频模型每档分别填写静音和含音频单价；图片/音频填写单价。建议提供 default 兜底。</span>
               </div>
+              </section>
 
               <!-- 启停 -->
+              <section class="model-config-section model-status-section">
               <h4 class="form-section-title"><i data-lucide="power" style="width: 14px; height: 14px;"></i> 启停控制</h4>
-              <div class="form-group">
+              <div class="form-group model-status-control">
                 <label class="switch">
                   <input type="checkbox" v-model="modelForm.is_enabled">
                   <span class="slider"></span>
                 </label>
-                <span class="switch-label-text">{{ modelForm.is_enabled ? '已启用（前端下拉中可见）' : '已停用（前端下拉中隐藏）' }}</span>
+                <span class="switch-label-text"><strong>{{ modelForm.is_enabled ? '已启用' : '已停用' }}</strong><small>{{ modelForm.is_enabled ? '用户可在生成页选择该模型' : '该模型不会出现在用户端' }}</small></span>
               </div>
+              </section>
             </div>
-            <div class="modal-footer">
-              <button class="btn-cancel" @click="closeModelModal">取消</button>
-              <button class="btn-submit" @click="submitModel">{{ editingModel ? '保存修改' : '确认创建' }}</button>
+            <div class="modal-footer model-config-footer">
+              <span class="model-footer-note"><span class="required">*</span> 为必填项</span>
+              <div class="model-footer-actions">
+                <button type="button" class="btn-cancel" @click="closeModelModal">取消</button>
+                <button type="button" class="btn-submit" @click="submitModel">{{ editingModel ? '保存修改' : '确认创建' }}</button>
+              </div>
             </div>
           </div>
         </div>
@@ -1104,11 +1109,15 @@
                 <div class="detail-item detail-full"><span class="detail-label">主端点</span><span class="detail-value mono-text">{{ selectedModelDetail.endpoint || '-' }}</span></div>
                 <div class="detail-item detail-full"><span class="detail-label">备用端点</span><span class="detail-value mono-text">{{ selectedModelDetail.endpoint_2 || '-' }}</span></div>
                 <div class="detail-item detail-full pricing-detail-item">
-                  <span class="detail-label">上游ID路由</span>
-                  <div v-if="selectedModelDetail.upstream_id_by_resolution && Object.keys(selectedModelDetail.upstream_id_by_resolution).length" class="pricing-table-wrap detail-pricing-table">
+                  <span class="detail-label">上游路由优先级链</span>
+                  <div v-if="getRoutePriorityRows(selectedModelDetail).length" class="pricing-table-wrap detail-pricing-table">
                     <table class="pricing-table route-table">
-                      <thead><tr><th>分辨率 / 尺寸键</th><th>上游模型 ID</th></tr></thead>
-                      <tbody><tr v-for="(value, key) in selectedModelDetail.upstream_id_by_resolution" :key="key"><td>{{ key }}</td><td>{{ value }}</td></tr></tbody>
+                      <thead><tr><th>分辨率 / 尺寸键</th><th>优先级</th><th>上游模型 ID</th></tr></thead>
+                      <tbody>
+                        <tr v-for="route in getRoutePriorityRows(selectedModelDetail)" :key="`${route.resolution}-${route.priority}`">
+                          <td>{{ route.resolution }}</td><td>{{ route.priority }}</td><td>{{ route.upstreamId }}</td>
+                        </tr>
+                      </tbody>
                     </table>
                   </div>
                   <span v-else class="detail-value">-</span>
@@ -1128,16 +1137,6 @@
                 </div>
                 <div class="detail-item detail-full"><span class="detail-label">支持特性</span><span class="detail-value">{{ (selectedModelDetail.supported_features || []).join('、') || '-' }}</span></div>
                 <div class="detail-item detail-full"><span class="detail-label">支持分辨率</span><span class="detail-value">{{ (selectedModelDetail.supported_resolutions || []).join('、') || '-' }}</span></div>
-                <div class="detail-item detail-full pricing-detail-item">
-                  <span class="detail-label">分辨率候选上游 ID</span>
-                  <div v-if="selectedModelDetail.resolution_variants && Object.keys(selectedModelDetail.resolution_variants).length" class="pricing-table-wrap detail-pricing-table">
-                    <table class="pricing-table route-table">
-                      <thead><tr><th>标准分辨率</th><th>候选上游私有 ID（按顺序回退）</th></tr></thead>
-                      <tbody><tr v-for="(variants, resolution) in selectedModelDetail.resolution_variants" :key="resolution"><td>{{ resolution }}</td><td>{{ variants.join('、') }}</td></tr></tbody>
-                    </table>
-                  </div>
-                  <span v-else class="detail-value">-</span>
-                </div>
                 <div class="detail-item detail-full"><span class="detail-label">支持宽高比</span><span class="detail-value">{{ (selectedModelDetail.supported_aspect_ratios || []).join('、') || '-' }}</span></div>
                 <div class="detail-item detail-full"><span class="detail-label">支持时长</span><span class="detail-value">{{ (selectedModelDetail.supported_durations || []).join('、') || '-' }}</span></div>
                 <div class="detail-item detail-full"><span class="detail-label">支持尺寸</span><span class="detail-value">{{ (selectedModelDetail.supported_sizes || []).join('、') || '-' }}</span></div>
@@ -1308,22 +1307,24 @@
               </div>
               <div class="form-group">
                 <div class="pricing-editor-header">
-                  <label class="form-label">分辨率候选上游 ID (resolution_variants)</label>
-                  <button type="button" class="pricing-add-btn" @click="addKeyValueRow(cloneForm.resolution_variants)">+ 添加映射</button>
+                  <label class="form-label">上游路由优先级链</label>
+                  <button type="button" class="pricing-add-btn" @click="addCloneRouteRow">+ 添加路由</button>
                 </div>
                 <div class="pricing-table-wrap">
-                  <table class="pricing-table route-table">
-                    <thead><tr><th>标准分辨率</th><th>候选上游私有 ID（按顺序回退）</th><th>操作</th></tr></thead>
+                  <table class="pricing-table resolution-config-table">
+                    <thead><tr><th>分辨率 / 尺寸键</th><th>首选上游 ID（优先级 1）</th><th>回退上游 ID（优先级 2+）</th><th>操作</th></tr></thead>
                     <tbody>
-                      <tr v-for="(row, index) in cloneForm.resolution_variants" :key="index">
-                        <td><input v-model.trim="row.key" class="form-input" placeholder="例如 720P"></td>
-                        <td><input v-model="row.value" class="form-input" placeholder="主上游ID,备用上游ID"></td>
-                        <td><button type="button" class="pricing-remove-btn" @click="removeKeyValueRow(cloneForm.resolution_variants, index)">删除</button></td>
+                      <tr v-for="(row, index) in cloneForm.resolution_configs" :key="index">
+                        <td><input v-model.trim="row.key" class="form-input" placeholder="例如 720P / all"></td>
+                        <td><input v-model.trim="row.upstream_id" class="form-input" placeholder="首选上游模型 ID"></td>
+                        <td><TokenListInput v-model="row.variants" placeholder="按回退顺序输入 ID" /></td>
+                        <td><button type="button" class="pricing-remove-btn" @click="removeKeyValueRow(cloneForm.resolution_configs, index)">删除</button></td>
                       </tr>
-                      <tr v-if="cloneForm.resolution_variants.length === 0"><td colspan="3" class="pricing-empty">留空表示清空候选上游 ID 映射</td></tr>
+                      <tr v-if="cloneForm.resolution_configs.length === 0"><td colspan="4" class="pricing-empty">留空表示克隆时清空全部上游路由</td></tr>
                     </tbody>
                   </table>
                 </div>
+                <span class="form-hint-text">源模型路由已载入；可同时覆盖首选与回退路由，顺序即后端 priority_order。</span>
               </div>
               <div class="form-group">
                 <label class="form-label">描述</label>
@@ -1348,6 +1349,8 @@
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import AppLayout from '../components/layout/AppLayout.vue'
+import TokenListInput from '../components/TokenListInput.vue'
+import { removeStorage } from '../utils/storage'
 import { getAnnouncementsApi, createAnnouncementApi, updateAnnouncementApi, deleteAnnouncementApi } from '../api/announcement'
 import {
   getAdminModelsApi, getAdminModelDetailApi, createAdminModelApi, updateAdminModelApi,
@@ -1747,7 +1750,7 @@ const cloneForm = ref({
   model_version: '',
   price_multiplier: null,
   price_tiers: [],
-  resolution_variants: [],
+  resolution_configs: [],
   description: ''
 })
 
@@ -1763,10 +1766,6 @@ function formatPriceTiers(tiers, mediaType) {
     }
     return `${key}: ${value}`
   }).join(' · ')
-}
-
-function objectToRows(value) {
-  return Object.entries(value || {}).map(([key, rowValue]) => ({ key, value: rowValue }))
 }
 
 function addKeyValueRow(rows, limit = Infinity) {
@@ -1824,28 +1823,72 @@ function priceTierRowsToObject(rows, mediaType) {
   return tiers
 }
 
-function routeRowsToObject(rows) {
-  const routes = {}
-  for (const row of rows) {
-    const key = String(row.key || '').trim()
-    const value = String(row.value || '').trim()
-    if (!key || !value) throw new Error('上游 ID 路由的键和值都不能为空')
-    if (Object.hasOwn(routes, key)) throw new Error(`上游 ID 路由存在重复键：${key}`)
-    routes[key] = value
-  }
-  return routes
+function resolutionConfigObjectToRows(model) {
+  const supported = new Set(model.supported_resolutions || [])
+  const routes = model.upstream_id_by_resolution || {}
+  const variants = model.resolution_variants || {}
+  const keys = [...new Set([...supported, ...Object.keys(routes), ...Object.keys(variants)])]
+  return keys.map(key => ({
+    key,
+    user_selectable: supported.has(key),
+    upstream_id: routes[key] || '',
+    variants: Array.isArray(variants[key]) ? [...variants[key]] : (variants[key] ? [String(variants[key])] : [])
+  }))
 }
 
-function resolutionVariantRowsToObject(rows) {
-  const mappings = {}
+function addResolutionConfigRow() {
+  modelForm.value.resolution_configs.push({
+    key: '', user_selectable: true, upstream_id: '', variants: []
+  })
+}
+
+function addCloneRouteRow() {
+  cloneForm.value.resolution_configs.push({
+    key: '', user_selectable: false, upstream_id: '', variants: []
+  })
+}
+
+function resolutionConfigRowsToPayload(rows) {
+  const supportedResolutions = []
+  const routes = {}
+  const variants = {}
+  const seenKeys = new Set()
   for (const row of rows) {
     const key = String(row.key || '').trim()
-    const variants = String(row.value || '').split(',').map(value => value.trim()).filter(Boolean)
-    if (!key || variants.length === 0) throw new Error('分辨率候选上游 ID 的标准分辨率和候选 ID 都不能为空')
-    if (Object.hasOwn(mappings, key)) throw new Error(`分辨率候选上游 ID 存在重复标准分辨率：${key}`)
-    mappings[key] = [...new Set(variants)]
+    if (!key) throw new Error('分辨率配置的键不能为空')
+    if (seenKeys.has(key)) throw new Error(`分辨率配置存在重复键：${key}`)
+    seenKeys.add(key)
+
+    const upstreamId = String(row.upstream_id || '').trim()
+    if (upstreamId) routes[key] = upstreamId
+    if (row.user_selectable) supportedResolutions.push(key)
+
+    const fallbackIds = (row.variants || [])
+      .map(value => String(value).trim())
+      .filter(value => value && value !== upstreamId)
+    if (fallbackIds.length) variants[key] = [...new Set(fallbackIds)]
   }
-  return mappings
+  return { supportedResolutions, routes, variants }
+}
+
+function getRoutePriorityRows(model) {
+  const routes = model?.upstream_id_by_resolution || {}
+  const variants = model?.resolution_variants || {}
+  const resolutions = [...new Set([...Object.keys(routes), ...Object.keys(variants)])]
+  return resolutions.flatMap(resolution => {
+    const primaryId = String(routes[resolution] || '').trim()
+    const fallbackIds = Array.isArray(variants[resolution]) ? variants[resolution] : []
+    const rows = primaryId ? [{ resolution, priority: 1, upstreamId: primaryId }] : []
+    const seenIds = new Set(primaryId ? [primaryId] : [])
+    fallbackIds.forEach((value, index) => {
+      const upstreamId = String(value || '').trim()
+      if (upstreamId && !seenIds.has(upstreamId)) {
+        seenIds.add(upstreamId)
+        rows.push({ resolution, priority: index + 2, upstreamId })
+      }
+    })
+    return rows
+  })
 }
 
 function getModelStatusClass(s) {
@@ -2047,21 +2090,21 @@ const defaultModelForm = () => ({
   model_id: '', business_model_id: '', model_name: '', model_version: '', display_name: '',
   vendor: 'vendor_a', vendor_display_name: '', media_type: 'image',
   upstream_model_id: '', endpoint: '', endpoint_2: '', generation_type: 'text_to_image',
-  upstream_id_by_resolution: [{ key: 'default', value: '' }],
-  resolution_variants: [],
+  resolution_configs: [{ key: 'default', user_selectable: false, upstream_id: '', variants: [] }],
   supported_features: [],
-  supported_resolutions_text: '',
-  supported_aspect_ratios_text: '',
-  supported_durations_text: '',
+  supported_aspect_ratios: [],
+  supported_durations: [],
   sound_mode: null, ui_features: [],
   max_width: null, max_height: null, min_width: null, min_height: null,
-  max_duration: null, max_fps: null,
+  max_fps: null,
   max_reference_images: null, max_reference_videos: null, max_reference_audios: null,
-  requires_input: null, input_materials: { image: 0, video: 0, audio: 0 }, supports_audio: false,
+  requires_input: null, input_materials: { image: 0, video: 0, audio: 0 }, material_limits_changed: false,
+  original_reference_limits: { image: null, video: null, audio: null },
+  original_max_duration: null, original_supported_durations: [],
   price_multiplier: 1.00,
   currency: 'CNY', price_tiers: [{ key: 'default', value: null }],
   status: 'active', is_enabled: true,
-  availability_region: '', description: '', tagsText: ''
+  availability_region: '', description: '', tags: []
 })
 const modelForm = ref(defaultModelForm())
 
@@ -2070,53 +2113,46 @@ function fillModelForm(model) {
   const soundMode = mediaType === 'video'
     ? (model.sound_mode || (model.supports_audio === true ? 'free' : 'disabled-silent'))
     : null
+  const supportedDurations = model.supported_durations?.length
+    ? model.supported_durations.map(Number)
+    : (model.max_duration ? [Number(model.max_duration)] : [])
   modelForm.value = {
     ...defaultModelForm(),
     ...model,
     media_type: mediaType,
     supported_features: [...(model.supported_features || [])],
     sound_mode: soundMode,
-    supports_audio: soundMode === 'free',
     ui_features: [...(model.ui_features || [])],
-    supported_resolutions_text: (model.supported_resolutions || []).join(','),
-    supported_aspect_ratios_text: (model.supported_aspect_ratios || []).join(','),
-    supported_durations_text: (model.supported_durations || []).join(','),
-    tagsText: (model.tags || []).join(','),
+    supported_aspect_ratios: [...(model.supported_aspect_ratios || [])],
+    supported_durations: [...supportedDurations],
+    original_max_duration: model.max_duration ?? null,
+    original_supported_durations: [...supportedDurations],
+    tags: [...(model.tags || [])],
+    resolution_configs: resolutionConfigObjectToRows(model),
     price_tiers: priceTierObjectToRows(model.price_tiers, mediaType),
-    upstream_id_by_resolution: objectToRows(model.upstream_id_by_resolution),
-    resolution_variants: Object.entries(model.resolution_variants || {}).map(([key, variants]) => ({
-      key,
-      value: Array.isArray(variants) ? variants.join(',') : String(variants || '')
-    })),
+    max_reference_images: Number(model.max_reference_images ?? model.input_materials?.image) || 0,
+    max_reference_videos: Number(model.max_reference_videos ?? model.input_materials?.video) || 0,
+    max_reference_audios: Number(model.max_reference_audios ?? model.input_materials?.audio) || 0,
     input_materials: {
       image: Number(model.input_materials?.image) || 0,
       video: Number(model.input_materials?.video) || 0,
       audio: Number(model.input_materials?.audio) || 0
-    }
+    },
+    original_reference_limits: {
+      image: model.max_reference_images ?? null,
+      video: model.max_reference_videos ?? null,
+      audio: model.max_reference_audios ?? null
+    },
+    material_limits_changed: false
   }
 }
 
 function handleModelMediaTypeChange() {
   if (modelForm.value.media_type === 'video') {
     modelForm.value.sound_mode ||= 'disabled-silent'
-    modelForm.value.supports_audio = modelForm.value.sound_mode === 'free'
   } else {
     modelForm.value.sound_mode = null
-    modelForm.value.supports_audio = false
   }
-}
-
-function handleSoundModeChange() {
-  modelForm.value.supports_audio = modelForm.value.media_type === 'video' && modelForm.value.sound_mode === 'free'
-}
-
-function handleSupportsAudioChange() {
-  if (modelForm.value.media_type !== 'video') {
-    modelForm.value.supports_audio = false
-    modelForm.value.sound_mode = null
-    return
-  }
-  modelForm.value.sound_mode = modelForm.value.supports_audio ? 'free' : 'disabled-silent'
 }
 
 async function openModelModal(model) {
@@ -2164,14 +2200,15 @@ function buildModelPayload() {
     status: f.status,
     is_enabled: !!f.is_enabled
   }
-  if (f.generation_type) payload.generation_type = f.generation_type
-  if (f.upstream_model_id) payload.upstream_model_id = f.upstream_model_id
+  payload.generation_type = f.generation_type?.trim() || null
+  payload.upstream_model_id = f.upstream_model_id?.trim() || null
   const endpoint = f.endpoint?.trim()
-  if (endpoint) payload.endpoint = endpoint
+  payload.endpoint = endpoint || null
   payload.endpoint_2 = f.endpoint_2 || ''
-  if (f.vendor_display_name) payload.vendor_display_name = f.vendor_display_name
-  if (f.availability_region) payload.availability_region = f.availability_region
-  if (f.description) payload.description = f.description
+  payload.vendor_display_name = f.vendor_display_name?.trim() ||
+    (!editingModel.value ? vendorOptions.find(option => option.value === f.vendor)?.label : null) || null
+  payload.availability_region = f.availability_region?.trim() || null
+  payload.description = f.description?.trim() || null
   if (f.currency) payload.currency = f.currency
   if (f.price_multiplier != null) payload.price_multiplier = Number(f.price_multiplier)
 
@@ -2182,18 +2219,23 @@ function buildModelPayload() {
   payload.sound_mode = f.media_type === 'video' ? (f.sound_mode || 'disabled-silent') : null
   // ui_features 允许为空数组（清空所有特色功能），始终发送
   payload.ui_features = [...(f.ui_features || [])]
-  payload.supported_resolutions = f.supported_resolutions_text.split(',').map(s => s.trim()).filter(Boolean)
-  payload.supported_aspect_ratios = f.supported_aspect_ratios_text.split(',').map(s => s.trim()).filter(Boolean)
-  payload.supported_durations = f.supported_durations_text.split(',').map(s => Number(s.trim())).filter(n => Number.isInteger(n) && n > 0)
-  if (f.tagsText && f.tagsText.trim()) {
-    payload.tags = f.tagsText.split(',').map(s => s.trim()).filter(Boolean)
-  }
+  payload.supported_aspect_ratios = [...(f.supported_aspect_ratios || [])]
+  payload.supported_durations = (f.supported_durations || []).map(Number).filter(n => Number.isInteger(n) && n > 0)
+  const normalizedDurations = [...payload.supported_durations].sort((a, b) => a - b)
+  const originalDurations = [...(f.original_supported_durations || [])].map(Number).sort((a, b) => a - b)
+  const durationsChanged = JSON.stringify(normalizedDurations) !== JSON.stringify(originalDurations)
+  payload.max_duration = durationsChanged
+    ? (payload.supported_durations.length ? Math.max(...payload.supported_durations) : null)
+    : f.original_max_duration
+  payload.tags = [...(f.tags || [])]
 
   // 数值字段 - 只在有有效值时才添加
-  ;['max_width', 'max_height', 'min_width', 'min_height', 'max_duration', 'max_fps', 'max_reference_images', 'max_reference_videos', 'max_reference_audios'].forEach(k => {
+  ;['max_width', 'max_height', 'min_width', 'min_height', 'max_fps'].forEach(k => {
     const val = Number(f[k])
     if (f[k] !== null && f[k] !== '' && f[k] !== undefined && !isNaN(val)) {
       payload[k] = val
+    } else {
+      payload[k] = null
     }
   })
 
@@ -2201,19 +2243,21 @@ function buildModelPayload() {
   payload.supports_audio = f.media_type === 'video' && payload.sound_mode === 'free'
 
   const inputMaterials = {}
-  for (const key of ['image', 'video', 'audio']) {
-    const value = Number(f.input_materials?.[key] ?? 0)
+  const materialFields = { image: 'max_reference_images', video: 'max_reference_videos', audio: 'max_reference_audios' }
+  for (const [key, field] of Object.entries(materialFields)) {
+    const value = Number(f[field] ?? 0)
     if (!Number.isInteger(value) || value < 0) {
-      throw new Error('输入素材配额必须是大于或等于 0 的整数')
+      throw new Error('素材最大数量必须是大于或等于 0 的整数')
     }
-    inputMaterials[key] = value
+    inputMaterials[key] = f.material_limits_changed ? value : Number(f.input_materials?.[key] ?? 0)
+    payload[field] = f.material_limits_changed ? value : f.original_reference_limits?.[key]
   }
   payload.input_materials = inputMaterials
 
-  payload.upstream_id_by_resolution = routeRowsToObject(f.upstream_id_by_resolution)
-
-  payload.resolution_variants = resolutionVariantRowsToObject(f.resolution_variants)
-
+  const resolutionConfig = resolutionConfigRowsToPayload(f.resolution_configs)
+  payload.supported_resolutions = resolutionConfig.supportedResolutions
+  payload.upstream_id_by_resolution = resolutionConfig.routes
+  payload.resolution_variants = resolutionConfig.variants
   payload.price_tiers = priceTierRowsToObject(f.price_tiers, f.media_type)
 
   return payload
@@ -2231,11 +2275,6 @@ async function submitModel() {
   let payload
   try {
     payload = buildModelPayload()
-    const invalidRoute = Object.entries(payload.upstream_id_by_resolution).some(([key, value]) => !key.trim() || typeof value !== 'string' || !value.trim())
-    if (invalidRoute) {
-      alert('上游 ID 路由的键和值都必须是非空字符串')
-      return
-    }
     const tierEntries = Object.entries(payload.price_tiers)
     if (tierEntries.length > 32) {
       alert('分级定价最多 32 档')
@@ -2262,11 +2301,15 @@ async function submitModel() {
     if (editingModel.value) {
       // PATCH：构建增量更新数据，只包含有意义的字段
       const { model_id, vendor, media_type, ...patchData } = payload
-      // 移除值为null、undefined、空字符串的可选字段，避免422验证错误
-      // 注意：sound_mode 允许为 null（非视频模型），需要保留以便清空
+      // 清空值也需要显式提交，让后端能够移除旧配置。
       const cleanPatchData = {}
+      const clearableFields = new Set([
+        'sound_mode', 'requires_input', 'endpoint', 'endpoint_2', 'upstream_model_id',
+        'generation_type', 'vendor_display_name', 'availability_region', 'description',
+        'max_width', 'max_height', 'min_width', 'min_height', 'max_duration', 'max_fps'
+      ])
       for (const [key, value] of Object.entries(patchData)) {
-        if (key === 'sound_mode' || key === 'requires_input' || key === 'endpoint_2') {
+        if (clearableFields.has(key)) {
           cleanPatchData[key] = value
         } else if (value !== null && value !== undefined && value !== '') {
           cleanPatchData[key] = value
@@ -2289,6 +2332,9 @@ async function submitModel() {
       await createAdminModelApi(payload)
       addLog('create', `新增模型「${payload.display_name}」`, `模型#${payload.model_id}`)
     }
+    // 后台模型能力变更后立即使生成页模型缓存失效，避免继续读取旧的素材限制。
+    removeStorage('model_config_cache')
+    removeStorage('model_config_cache_fallback')
     closeModelModal()
     await fetchModels()
   } catch (e) {
@@ -2423,10 +2469,7 @@ function openCloneModal(m) {
     model_version: m.model_version,
     price_multiplier: m.price_multiplier,
     price_tiers: priceTierObjectToRows(m.price_tiers, m.media_type),
-    resolution_variants: Object.entries(m.resolution_variants || {}).map(([key, variants]) => ({
-      key,
-      value: Array.isArray(variants) ? variants.join(',') : String(variants || '')
-    })),
+    resolution_configs: resolutionConfigObjectToRows(m),
     description: m.description
   }
   showCloneModal.value = true
@@ -2458,7 +2501,9 @@ async function submitClone() {
     if (cloneForm.value.model_version) payload.model_version = cloneForm.value.model_version
     if (cloneForm.value.price_multiplier != null) payload.price_multiplier = cloneForm.value.price_multiplier
     if (cloneForm.value.price_tiers.length) payload.price_tiers = priceTierRowsToObject(cloneForm.value.price_tiers, cloneSourceModel.value.media_type)
-    payload.resolution_variants = resolutionVariantRowsToObject(cloneForm.value.resolution_variants)
+    const routeConfig = resolutionConfigRowsToPayload(cloneForm.value.resolution_configs)
+    payload.upstream_id_by_resolution = routeConfig.routes
+    payload.resolution_variants = routeConfig.variants
     if (cloneForm.value.description) payload.description = cloneForm.value.description
 
     const res = await cloneAdminModelApi(cloneSourceModel.value.model_id, payload)
@@ -3007,6 +3052,9 @@ onUnmounted(() => {
   overflow-x: auto; border: 1.5px solid #e5e7eb; border-radius: 10px; background: white;
 }
 .pricing-table { width: 100%; border-collapse: collapse; }
+.resolution-config-table { min-width: 780px; }
+.resolution-config-table th:nth-child(2),
+.resolution-config-table td:nth-child(2) { width: 76px; min-width: 76px; white-space: nowrap; text-align: center; }
 .pricing-table th, .pricing-table td {
   padding: 9px 10px; text-align: left; border-bottom: 1px solid #eef2f7; font-size: 12.5px;
 }
@@ -3038,6 +3086,279 @@ onUnmounted(() => {
 
 /* ===== 模型弹窗扩展样式 ===== */
 .modal-xl { max-width: 880px; }
+.model-config-modal {
+  --model-surface: #ffffff;
+  --model-canvas: #f4f7fb;
+  --model-line: #dbe3ef;
+  --model-line-strong: #c8d4e3;
+  --model-ink: #142033;
+  --model-muted: #66758a;
+  --model-accent: #2563eb;
+  --model-accent-soft: #eaf1ff;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: min(1040px, calc(100vw - 40px));
+  max-width: 1040px;
+  max-height: 92vh;
+  overflow: hidden;
+  border: 1px solid rgba(203, 213, 225, 0.9);
+  border-radius: 20px;
+  background: var(--model-canvas);
+  color: var(--model-ink);
+  box-shadow: 0 28px 80px rgba(15, 23, 42, 0.28), 0 8px 24px rgba(15, 23, 42, 0.12);
+  animation: model-modal-enter 220ms cubic-bezier(.2,.8,.2,1) both;
+}
+.model-config-modal::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  z-index: 2;
+  height: 3px;
+  background: linear-gradient(90deg, #1d4ed8 0 42%, #38bdf8 42% 62%, #dbeafe 62% 100%);
+}
+.model-config-header {
+  flex: 0 0 auto;
+  padding: 20px 26px;
+  border-bottom-color: var(--model-line);
+  background: rgba(255, 255, 255, 0.96);
+}
+.model-modal-heading { display: flex; align-items: center; gap: 13px; min-width: 0; }
+.model-modal-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 42px;
+  border: 1px solid #bfdbfe;
+  border-radius: 12px;
+  color: var(--model-accent);
+  background: var(--model-accent-soft);
+}
+.model-config-header .modal-title { color: var(--model-ink); font-size: 18px; letter-spacing: -0.01em; }
+.model-modal-subtitle { margin: 4px 0 0; color: var(--model-muted); font-size: 12px; line-height: 1.4; }
+.model-config-header .modal-close-btn { border: 1px solid transparent; }
+.model-config-header .modal-close-btn:hover { border-color: var(--model-line); background: #f8fafc; }
+.model-config-header .modal-close-btn:focus-visible,
+.model-config-modal button:focus-visible,
+.model-config-modal input:focus-visible,
+.model-config-modal select:focus-visible,
+.model-config-modal textarea:focus-visible { outline: 3px solid rgba(37, 99, 235, 0.2); outline-offset: 2px; }
+.model-config-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 22px;
+  background:
+    linear-gradient(rgba(255,255,255,.35) 1px, transparent 1px),
+    var(--model-canvas);
+  background-size: 100% 32px;
+  scrollbar-gutter: stable;
+}
+.model-config-section {
+  position: relative;
+  margin-bottom: 16px;
+  padding: 20px 22px 4px;
+  border: 1px solid var(--model-line);
+  border-radius: 14px;
+  background: var(--model-surface);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.025);
+}
+.model-config-section:last-child { margin-bottom: 0; }
+.model-config-modal .form-section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 18px;
+  padding: 0 0 12px;
+  border-bottom: 1px solid #e8edf4;
+  color: var(--model-ink);
+  font-size: 14px;
+  font-weight: 750;
+  letter-spacing: 0.01em;
+}
+.model-config-modal .form-section-title i { color: var(--model-accent); }
+.model-config-modal .form-group { margin-bottom: 16px; }
+.model-config-modal .form-label { color: #344258; font-size: 12.5px; font-weight: 650; }
+.model-config-modal .form-input,
+.model-config-modal .form-select,
+.model-config-modal .form-textarea {
+  border-color: var(--model-line-strong);
+  border-radius: 9px;
+  background: #fff;
+  color: var(--model-ink);
+}
+.model-config-modal .form-input,
+.model-config-modal .form-select { min-height: 42px; }
+.model-config-modal .form-input:hover,
+.model-config-modal .form-select:hover,
+.model-config-modal .form-textarea:hover { border-color: #9fb0c5; }
+.model-config-modal .form-input:focus,
+.model-config-modal .form-select:focus,
+.model-config-modal .form-textarea:focus { border-color: var(--model-accent); box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1); }
+.model-config-modal .form-input:disabled,
+.model-config-modal .form-select:disabled { color: #64748b; cursor: not-allowed; background: #f1f5f9; border-style: dashed; }
+.model-config-modal .form-hint-text { color: #7b899b; line-height: 1.5; }
+.model-config-modal .checkbox-group {
+  gap: 8px;
+  padding: 10px;
+  border-color: var(--model-line);
+  border-radius: 10px;
+  background: #f8fafc;
+}
+.model-config-modal .checkbox-item {
+  min-height: 30px;
+  padding: 4px 9px;
+  border: 1px solid #e2e8f0;
+  border-radius: 7px;
+  background: #fff;
+  transition: border-color 150ms ease, background 150ms ease;
+}
+.model-config-modal .checkbox-item:hover { border-color: #93b4f5; background: #f8fbff; }
+.model-config-modal input[type='checkbox'] { accent-color: var(--model-accent); }
+.model-config-modal .pricing-table-wrap { border-color: var(--model-line); border-radius: 10px; }
+.model-config-modal .pricing-table th { padding-block: 10px; color: #526176; background: #f3f6fa; white-space: nowrap; }
+.model-config-modal .pricing-table td { background: #fff; }
+.model-config-modal .pricing-table tbody tr:hover td { background: #fbfdff; }
+.model-config-modal .pricing-table .form-input { min-height: 36px; }
+.model-config-modal .pricing-add-btn { color: #1d4ed8; background: var(--model-accent-soft); }
+.model-config-modal .pricing-add-btn:hover { background: #dbeafe; }
+.model-config-modal .pricing-remove-btn { border: 1px solid #fecaca; }
+.material-limit-section {
+  padding-bottom: 18px;
+  overflow: hidden;
+  border-color: #c7d7f2;
+  background: linear-gradient(145deg, #ffffff 0%, #f8fbff 100%);
+}
+.material-limit-section::after {
+  content: '';
+  position: absolute;
+  top: -58px;
+  right: -42px;
+  width: 150px;
+  height: 150px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(37, 99, 235, 0.09), rgba(37, 99, 235, 0));
+  pointer-events: none;
+}
+.material-limit-heading {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+  padding-bottom: 13px;
+  border-bottom: 1px solid #e1e9f5;
+}
+.model-config-modal .material-limit-heading .form-section-title { margin-bottom: 4px; padding-bottom: 0; border-bottom: 0; }
+.material-limit-heading p { margin: 0; color: var(--model-muted); font-size: 12px; line-height: 1.5; }
+.material-sync-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  padding: 5px 9px;
+  border: 1px solid #bfdbfe;
+  border-radius: 999px;
+  color: #1d4ed8;
+  background: #eff6ff;
+  font-size: 11px;
+  font-weight: 650;
+}
+.material-limit-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.material-limit-card {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 13px;
+  border: 1px solid #dbe4f0;
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.92);
+  cursor: text;
+  transition: border-color 150ms ease, box-shadow 150ms ease, transform 150ms ease;
+}
+.material-limit-card:hover { border-color: #aac2e9; box-shadow: 0 5px 16px rgba(37, 99, 235, 0.07); transform: translateY(-1px); }
+.material-limit-card:focus-within { border-color: var(--model-accent); box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1); }
+.material-limit-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  color: #2563eb;
+  background: #eaf1ff;
+}
+.material-limit-video .material-limit-icon { color: #7c3aed; background: #f1eafe; }
+.material-limit-audio .material-limit-icon { color: #047857; background: #e7f8f1; }
+.material-limit-copy { display: flex; flex-direction: column; min-width: 0; }
+.material-limit-copy strong { color: #28364b; font-size: 12.5px; font-weight: 700; }
+.material-limit-copy small { margin-top: 2px; overflow: hidden; color: #7b899b; font-size: 10.5px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
+.material-limit-input-wrap {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid var(--model-line-strong);
+  border-radius: 9px;
+  background: #fff;
+}
+.model-config-modal .material-limit-input-wrap .form-input {
+  width: 100%;
+  min-height: 38px;
+  padding-right: 6px;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  font-weight: 700;
+}
+.material-limit-input-wrap > span { padding-right: 11px; color: #8592a5; font-size: 12px; }
+.material-limit-footer {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+  margin-top: 13px;
+  padding-top: 13px;
+  border-top: 1px dashed #d7e1ee;
+}
+.material-limit-note { display: inline-flex; align-items: center; gap: 6px; color: #65758b; font-size: 11.5px; line-height: 1.5; }
+.material-requirement-field { display: flex; align-items: center; gap: 9px; flex: 0 0 auto; color: #526176; font-size: 11.5px; font-weight: 650; }
+.model-config-modal .material-requirement-field .form-select { width: 122px; min-height: 34px; padding-block: 5px; font-size: 12px; }
+.model-status-section { padding-bottom: 18px; }
+.model-status-control {
+  display: flex;
+  align-items: center;
+  min-height: 58px;
+  margin-bottom: 0 !important;
+  padding: 10px 14px;
+  border: 1px solid var(--model-line);
+  border-radius: 10px;
+  background: #f8fafc;
+}
+.model-status-control .switch-label-text { display: flex; flex-direction: column; gap: 2px; color: var(--model-ink); }
+.model-status-control .switch-label-text small { color: var(--model-muted); font-size: 11.5px; font-weight: 400; }
+.model-config-footer {
+  flex: 0 0 auto;
+  justify-content: space-between;
+  align-items: center;
+  padding: 15px 26px;
+  border-top-color: var(--model-line);
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 -8px 24px rgba(15, 23, 42, 0.04);
+}
+.model-footer-note { color: var(--model-muted); font-size: 12px; }
+.model-footer-actions { display: flex; align-items: center; gap: 10px; }
+.model-config-footer .btn-cancel,
+.model-config-footer .btn-submit { min-width: 104px; min-height: 40px; border-radius: 9px; }
+.model-config-footer .btn-cancel { border: 1px solid var(--model-line-strong); background: #fff; }
+.model-config-footer .btn-submit { background: var(--model-accent); box-shadow: 0 4px 12px rgba(37, 99, 235, 0.22); }
+.model-config-footer .btn-submit:hover { background: #1d4ed8; box-shadow: 0 6px 16px rgba(37, 99, 235, 0.28); }
 .form-section-title {
   font-size: 14px; font-weight: 700; color: #111827;
   margin: 20px 0 14px; padding-bottom: 8px; border-bottom: 1px solid #e5e7eb;
@@ -3059,6 +3380,40 @@ onUnmounted(() => {
 
 .switch-label-text {
   margin-left: 12px; font-size: 13px; color: #374151; font-weight: 500;
+}
+
+@keyframes model-modal-enter {
+  from { opacity: 0; transform: translateY(10px) scale(.99); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@media (max-width: 760px) {
+  .modal-overlay:has(.model-config-modal) { align-items: flex-end; }
+  .model-config-modal {
+    width: 100%;
+    max-width: none;
+    max-height: 96dvh;
+    border-radius: 18px 18px 0 0;
+  }
+  .model-config-header { padding: 16px 18px; }
+  .model-modal-icon { width: 38px; height: 38px; flex-basis: 38px; }
+  .model-config-body { padding: 12px; }
+  .model-config-section { padding: 17px 14px 2px; }
+  .model-config-modal .form-row-2,
+  .model-config-modal .form-row-3 { grid-template-columns: 1fr; gap: 0; }
+  .material-limit-grid { grid-template-columns: 1fr; }
+  .material-limit-footer { align-items: stretch; flex-direction: column; gap: 10px; }
+  .material-requirement-field { justify-content: space-between; }
+  .model-config-footer { padding: 12px 16px; }
+  .model-footer-note { display: none; }
+  .model-footer-actions { width: 100%; }
+  .model-footer-actions .btn-cancel,
+  .model-footer-actions .btn-submit { flex: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .model-config-modal { animation: none; }
+  .model-config-modal *, .model-config-modal *::before, .model-config-modal *::after { transition-duration: 0.001ms !important; }
 }
 
 /* ===== 用量统计 ===== */

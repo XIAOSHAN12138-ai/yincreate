@@ -88,6 +88,14 @@
 
           <!-- 输入卡片 -->
           <div class="input-card">
+            <ModelFilterPopover
+              :groups="modelFilterGroups"
+              :selections="modelFilterSelections"
+              :matching-count="candidateModels.length"
+              :total-count="models.length"
+              @toggle="toggleModelFilter"
+              @clear="clearModelFilters"
+            />
             <!-- 输入区：上传 + 文字输入 -->
             <div class="input-card-body">
               <!-- 左侧上传区域（+号触发下拉菜单，双上传框时隐藏） -->
@@ -98,17 +106,20 @@
                 <div v-if="isUploadDropdownOpen" class="upload-menu" @click.stop>
                   <div class="upload-menu-section">
                     <div class="upload-section-title">本地上传</div>
-                    <button class="upload-option" @click="handleUploadType('image')">
+                    <button class="upload-option" :disabled="isReferenceTypeDisabled('image')" @click="handleUploadType('image')">
                       <i data-lucide="image-plus" style="width: 16px; height: 16px;"></i>
-                      上传图片
+                      <span>上传图片</span>
+                      <span class="upload-limit-badge">{{ getReferenceLimitLabel('image') }}</span>
                     </button>
-                    <button class="upload-option" @click="handleUploadType('video')">
+                    <button class="upload-option" :disabled="isReferenceTypeDisabled('video')" @click="handleUploadType('video')">
                       <i data-lucide="video-plus" style="width: 16px; height: 16px;"></i>
-                      上传视频
+                      <span>上传视频</span>
+                      <span class="upload-limit-badge">{{ getReferenceLimitLabel('video') }}</span>
                     </button>
-                    <button class="upload-option" @click="handleUploadType('audio')">
+                    <button class="upload-option" :disabled="isReferenceTypeDisabled('audio')" @click="handleUploadType('audio')">
                       <i data-lucide="music-plus" style="width: 16px; height: 16px;"></i>
-                      上传音频
+                      <span>上传音频</span>
+                      <span class="upload-limit-badge">{{ getReferenceLimitLabel('audio') }}</span>
                     </button>
                   </div>
                   <div class="upload-menu-divider"></div>
@@ -383,9 +394,18 @@
                   <Teleport to="body">
                     <div v-if="isModelDropdownOpen" class="select-dropdown model-dropdown-menu" :style="modelDropdownPos" @click.stop>
                       <div
-                        v-for="model in models"
+                        :class="['select-option', 'default-model-option', { active: modelSelectionMode === 'auto' }]"
+                        @click.stop="selectAutoModel"
+                      >
+                        <div class="model-option-main">
+                          <span class="model-name">智能匹配 <span class="default-badge">{{ candidateModels.length }} 个</span></span>
+                        </div>
+                      </div>
+                      <div v-if="candidateModels.length === 0" class="select-empty-state">当前组合暂无可用模型</div>
+                      <div
+                        v-for="model in candidateModels"
                         :key="model.id"
-                        :class="['select-option', { active: selectedModel === model.id }, { 'default-model-option': model.is_default }]"
+                        :class="['select-option', { active: modelSelectionMode === 'manual' && selectedModel === model.id }, { 'default-model-option': model.is_default }]"
                         @click.stop="selectModel(model)"
                       >
                         <div class="model-option-main">
@@ -422,7 +442,7 @@
                         :class="['select-option', { active: selectedFeature === feature.id }]"
                         @click.stop="selectFeature(feature)"
                       >
-                        {{ feature.label }}
+                        <span>{{ feature.label }}</span>
                       </div>
                     </div>
                   </Teleport>
@@ -451,7 +471,7 @@
                         :class="['select-option', { active: selectedRatio === ratio }]"
                         @click.stop="selectRatio(ratio)"
                       >
-                        {{ ratio }}
+                        <span>{{ ratio }}</span>
                       </div>
                     </div>
                   </Teleport>
@@ -481,7 +501,7 @@
                         :class="['select-option', { active: videoDuration === dur }]"
                         @click="selectDuration(dur)"
                       >
-                        {{ dur }} 秒
+                        <span>{{ dur }} 秒</span>
                       </div>
                     </div>
                   </Teleport>
@@ -509,7 +529,7 @@
                         :class="['select-option', { active: selectedQuality === quality.id }]"
                         @click.stop="selectQuality(quality)"
                       >
-                        {{ quality.label }}
+                        <span>{{ quality.label }}</span>
                       </div>
                     </div>
                   </Teleport>
@@ -859,6 +879,14 @@
 
           <!-- 底部输入卡片（与欢迎态复用相同结构） -->
           <div class="input-card input-card-bottom">
+            <ModelFilterPopover
+              :groups="modelFilterGroups"
+              :selections="modelFilterSelections"
+              :matching-count="candidateModels.length"
+              :total-count="models.length"
+              @toggle="toggleModelFilter"
+              @clear="clearModelFilters"
+            />
             <div class="input-card-body">
               <div v-if="!isDualUploadFeature" class="upload-dropdown" :class="{ open: isUploadDropdownOpen }">
                 <div class="upload-zone" @click.stop="toggleUploadDropdown" title="上传素材">
@@ -867,17 +895,20 @@
                 <div v-if="isUploadDropdownOpen" class="upload-menu" @click.stop>
                   <div class="upload-menu-section">
                     <div class="upload-section-title">本地上传</div>
-                    <button class="upload-option" @click="handleUploadType('image')">
+                    <button class="upload-option" :disabled="isReferenceTypeDisabled('image')" @click="handleUploadType('image')">
                       <i data-lucide="image-plus" style="width: 16px; height: 16px;"></i>
-                      上传图片
+                      <span>上传图片</span>
+                      <span class="upload-limit-badge">{{ getReferenceLimitLabel('image') }}</span>
                     </button>
-                    <button class="upload-option" @click="handleUploadType('video')">
+                    <button class="upload-option" :disabled="isReferenceTypeDisabled('video')" @click="handleUploadType('video')">
                       <i data-lucide="video-plus" style="width: 16px; height: 16px;"></i>
-                      上传视频
+                      <span>上传视频</span>
+                      <span class="upload-limit-badge">{{ getReferenceLimitLabel('video') }}</span>
                     </button>
-                    <button class="upload-option" @click="handleUploadType('audio')">
+                    <button class="upload-option" :disabled="isReferenceTypeDisabled('audio')" @click="handleUploadType('audio')">
                       <i data-lucide="music-plus" style="width: 16px; height: 16px;"></i>
-                      上传音频
+                      <span>上传音频</span>
+                      <span class="upload-limit-badge">{{ getReferenceLimitLabel('audio') }}</span>
                     </button>
                   </div>
                   <div class="upload-menu-divider"></div>
@@ -1122,9 +1153,18 @@
                   <Teleport to="body">
                     <div v-if="isModelDropdownOpen" class="select-dropdown model-dropdown-menu" :style="modelDropdownPos" @click.stop>
                       <div
-                        v-for="model in models"
+                        :class="['select-option', 'default-model-option', { active: modelSelectionMode === 'auto' }]"
+                        @click.stop="selectAutoModel"
+                      >
+                        <div class="model-option-main">
+                          <span class="model-name">智能匹配 <span class="default-badge">{{ candidateModels.length }} 个</span></span>
+                        </div>
+                      </div>
+                      <div v-if="candidateModels.length === 0" class="select-empty-state">当前组合暂无可用模型</div>
+                      <div
+                        v-for="model in candidateModels"
                         :key="model.id"
-                        :class="['select-option', { active: selectedModel === model.id }, { 'default-model-option': model.is_default }]"
+                        :class="['select-option', { active: modelSelectionMode === 'manual' && selectedModel === model.id }, { 'default-model-option': model.is_default }]"
                         @click.stop="selectModel(model)"
                       >
                         <div class="model-option-main">
@@ -1154,7 +1194,7 @@
                         :class="['select-option', { active: selectedFeature === feature.id }]"
                         @click.stop="selectFeature(feature)"
                       >
-                        {{ feature.label }}
+                        <span>{{ feature.label }}</span>
                       </div>
                     </div>
                   </Teleport>
@@ -1176,7 +1216,7 @@
                         :class="['select-option', { active: selectedRatio === ratio }]"
                         @click.stop="selectRatio(ratio)"
                       >
-                        {{ ratio }}
+                        <span>{{ ratio }}</span>
                       </div>
                     </div>
                   </Teleport>
@@ -1198,7 +1238,7 @@
                         :class="['select-option', { active: videoDuration === dur }]"
                         @click="selectDuration(dur)"
                       >
-                        {{ dur }} 秒
+                        <span>{{ dur }} 秒</span>
                       </div>
                     </div>
                   </Teleport>
@@ -1219,7 +1259,7 @@
                         :class="['select-option', { active: selectedQuality === quality.id }]"
                         @click.stop="selectQuality(quality)"
                       >
-                        {{ quality.label }}
+                        <span>{{ quality.label }}</span>
                       </div>
                     </div>
                   </Teleport>
@@ -1496,6 +1536,7 @@
 import { ref, computed, watch, onMounted, onUnmounted, nextTick, reactive } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppLayout from '../components/layout/AppLayout.vue'
+import ModelFilterPopover from '../components/ModelFilterPopover.vue'
 import { userData } from '../data/userData'
 import { useUserStore } from '../stores/user'
 import { estimatePriceApi, getTaskChargeInfoApi } from '../api/profile'
@@ -1513,6 +1554,16 @@ import {
 import { getMediaListApi, getMediaStreamApi } from '../api/media'
 import { getStorage, getStorageWithExpiry, setStorage, setStorageWithExpiry } from '../utils/storage'
 import { downloadFile } from '../utils/download'
+import {
+  buildFacetOptions,
+  buildModelFilterOptions,
+  chooseSmartModel,
+  filterModelsByTagSelections,
+  getModelMaterialConfig,
+  resolveModelReferenceLimit,
+  resolveModelRequiresInput,
+  resolveRouteContext
+} from '../utils/modelCapabilities'
 
 const route = useRoute()
 const router = useRouter()
@@ -1653,6 +1704,7 @@ function startNewChat() {
   atImageCounter = 0
   atVideoCounter = 0
   atAudioCounter = 0
+  resetModelFilters()
 }
 
 async function selectConversation(id) {
@@ -1801,9 +1853,16 @@ async function toggleFeedback(card, type) {
 const prompt = ref('')
 const selectedType = ref('image')
 const selectedModel = ref('')
+const modelSelectionMode = ref('auto')
 const selectedRatio = ref('16:9')
 const selectedQuality = ref('1080p')
 const selectedFeature = ref('')
+const modelFilterSelections = reactive({
+  feature: [],
+  resolution: [],
+  ratio: [],
+  duration: []
+})
 const isGenerating = ref(false)
 const uploadedFiles = ref([])
 const referencedFiles = ref([])
@@ -1838,9 +1897,13 @@ const dualUploadConfig = computed(() => {
   return isDualUploadFeature.value ? dualUploadFeatureConfig[selectedFeature.value] : null
 })
 
-// 文生图模式：图片类型下未选功能（默认即文生图）或主动选择「文生图」功能（纯文字生成，不需要素材）
+// 文生图模式：图片类型下未选功能（默认即文生图）或主动选择「文生图」功能（纯文字生成，不需要素材）。
+// requires_input 模型必须保留上传入口，避免用户无法满足后端声明的输入要求。
 const isTextToImageMode = computed(() => {
-  return selectedType.value === 'image' && (selectedFeature.value === '' || selectedFeature.value === 'text2img')
+  const model = models.value.find(m => m.id === selectedModel.value)
+  return selectedType.value === 'image' &&
+    !modelRequiresInput(model) &&
+    (selectedFeature.value === '' || selectedFeature.value === 'text2img')
 })
 
 // 图片类型下需要素材的功能：选了非「文生图」的功能（参考图、风格转换、局部重绘等）
@@ -1852,6 +1915,27 @@ const mentionDropdownStyle = ref({})
 const videoSoundEnabled = ref(false)
 const videoDuration = ref(5)
 
+function getRoutingInputFiles() {
+  if (isDualUploadFeature.value) {
+    const slotFiles = Object.values(dualUploadSlots.value).filter(Boolean)
+    const slotIds = new Set(slotFiles.map(file => file.object_id).filter(Boolean))
+    return [...slotFiles, ...referencedFiles.value.filter(file => !slotIds.has(file.object_id))]
+  }
+  return referencedFiles.value.length > 0 ? referencedFiles.value : uploadedFiles.value
+}
+
+function getSelectedModelRoute(model, feature = selectedFeature.value) {
+  const resolution = qualityMap[selectedQuality.value] || selectedQuality.value || '1080P'
+  return resolveRouteContext(model, {
+    mediaType: selectedType.value,
+    uiFeature: feature,
+    resolution,
+    ratio: selectedRatio.value,
+    duration: selectedType.value === 'video' ? videoDuration.value : null,
+    inputFiles: getRoutingInputFiles()
+  })
+}
+
 // 图片生成高级参数
 const imageBackground = ref('auto') // transparent / opaque / auto (GPT模型)
 const imageOutputFormat = ref('png') // png / jpeg / webp (GPT模型)
@@ -1859,15 +1943,8 @@ const imageOutputQuality = ref('auto') // low / medium / high / auto (GPT模型)
 const imageWatermark = ref(false) // 是否添加水印 (千问/万象模型)
 const imageCount = ref(1) // 生成数量 1-10
 const videoDurationOptions = computed(() => {
-  const model = models.value.find(m => m.id === selectedModel.value)
-  // 优先使用模型的 valid_durations 字段（如 Seedance 仅支持 5/10/11）
-  if (model?.valid_durations && model.valid_durations.length > 0) {
-    return model.valid_durations
-  }
-  const maxDur = model?.max_duration || 15
-  const arr = []
-  for (let i = 1; i <= maxDur; i++) arr.push(i)
-  return arr
+  const options = durationFacetOptions.value.map(option => option.value).sort((a, b) => a - b)
+  return options.length > 0 ? options : [videoDuration.value]
 })
 const expandedCardId = ref(null)
 
@@ -1905,6 +1982,9 @@ const canGenerate = computed(() => {
   // 已达最大对话次数，禁止继续生成
   if (hasReachedMaxRounds.value) return false
   if (prompt.value.trim().length === 0) return false
+  if (!selectedModel.value || candidateModels.value.length === 0) return false
+  const model = models.value.find(item => item.id === selectedModel.value)
+  if (modelRequiresInput(model) && getRoutingInputFiles().length === 0) return false
   // 积分不足时禁用生成按钮（有预估价格且超过剩余积分）
   if (estimatedPrice.value && remainingPoints.value !== '--') {
     const cost = Number(estimatedPrice.value.estimated_cost) || 0
@@ -1945,9 +2025,19 @@ const referenceLimitFields = {
 
 function getReferenceLimit(type) {
   const model = models.value.find(m => m.id === selectedModel.value)
-  const value = Number(model?.[referenceLimitFields[type]])
-  // 兼容旧模型数据：0 是历史默认值，表示未配置限制；仅正整数才启用上限。
-  return Number.isInteger(value) && value > 0 ? value : null
+  if (!model) return null
+  return resolveModelReferenceLimit(model, type, {
+    variant: getSelectedModelRoute(model).variant,
+    resolution: selectedQuality.value
+  })
+}
+
+function modelRequiresInput(model) {
+  if (!model) return false
+  return resolveModelRequiresInput(model, {
+    variant: getSelectedModelRoute(model).variant,
+    resolution: selectedQuality.value
+  })
 }
 
 function getAttachedReferenceCount(type, excludedDualSlot = null) {
@@ -1958,13 +2048,30 @@ function getAttachedReferenceCount(type, excludedDualSlot = null) {
   return uploadedCount + dualCount
 }
 
+function getReferenceLimitMessage(type, limit, current = null) {
+  const label = getFileTypeLabel(type)
+  if (limit === 0) return `当前模型不支持${label}参考素材`
+  return `${label}参考素材最多可添加 ${limit} 个${current === null ? '' : `，当前为 ${current} 个`}`
+}
+
 function canAddReference(type, amount = 1, excludedDualSlot = null) {
   const limit = getReferenceLimit(type)
   if (limit === null) return true
   const current = getAttachedReferenceCount(type, excludedDualSlot)
   if (current + amount <= limit) return true
-  showToast(`${getFileTypeLabel(type)}参考素材最多可添加 ${limit} 个`, 'warning')
+  showToast(getReferenceLimitMessage(type, limit), 'warning')
   return false
+}
+
+function getReferenceLimitLabel(type) {
+  const limit = getReferenceLimit(type)
+  if (limit === null) return '未限制'
+  if (limit === 0) return '不支持'
+  return `${getAttachedReferenceCount(type)}/${limit}`
+}
+
+function isReferenceTypeDisabled(type) {
+  return getReferenceLimit(type) === 0
 }
 
 function validateReferenceLimits(files) {
@@ -1973,7 +2080,7 @@ function validateReferenceLimits(files) {
     if (limit === null) continue
     const count = files.filter(file => file.type === type).length
     if (count > limit) {
-      throw new Error(`${getFileTypeLabel(type)}参考素材最多可添加 ${limit} 个，当前为 ${count} 个`)
+      throw new Error(getReferenceLimitMessage(type, limit, count))
     }
   }
 }
@@ -2093,17 +2200,48 @@ const videoModels = ref([])
 const digitalHumanModels = ref([])
 const audioModels = ref([])
 
-const defaultModel = { id: '', name: '默认模型', description: '系统自动选择最优模型', is_default: true }
+const qualityMap = {
+  '480p': '480P',
+  '720p': '720P',
+  '1080p': '1080P',
+  '2k': '2K',
+  '4k': '4K'
+}
 
-const defaultAspectRatios = ['1:1', '16:9', '9:16', '4:3', '3:4', '5:4', '4:5', '21:9']
-// 根据当前模型的 supported_aspect_ratios 字段过滤可选比例；未设置时降级为默认列表
-const availableAspectRatios = computed(() => {
-  const model = models.value.find(m => m.id === selectedModel.value)
-  if (!model) return defaultAspectRatios
-  if (model.supported_aspect_ratios && model.supported_aspect_ratios.length > 0) {
-    return model.supported_aspect_ratios
+function resetModelFilters() {
+  for (const facet of Object.keys(modelFilterSelections)) {
+    modelFilterSelections[facet].splice(0)
   }
-  return defaultAspectRatios
+}
+
+function toggleModelFilter(facet, value) {
+  const selected = modelFilterSelections[facet]
+  if (!Array.isArray(selected)) return
+  const index = selected.findIndex(item => String(item) === String(value))
+  if (index >= 0) selected.splice(index, 1)
+  else selected.push(value)
+}
+
+function clearModelFilters() {
+  resetModelFilters()
+}
+
+// 工具栏参数只负责生成请求；只有独立筛选器中的标签会缩小候选模型。
+const baseFacetFilters = computed(() => ({ mediaType: selectedType.value }))
+const candidateModels = computed(() => filterModelsByTagSelections(
+  models.value,
+  modelFilterSelections,
+  selectedType.value
+))
+const featureFacetOptions = computed(() => buildFacetOptions(models.value, baseFacetFilters.value, 'feature'))
+const ratioFacetOptions = computed(() => buildFacetOptions(models.value, baseFacetFilters.value, 'ratio'))
+const qualityFacetOptions = computed(() => buildFacetOptions(models.value, baseFacetFilters.value, 'resolution'))
+const durationFacetOptions = computed(() => buildFacetOptions(models.value, baseFacetFilters.value, 'duration'))
+
+// 比例选项由接口能力并集生成；仅在旧缓存完全没有能力字段时保留当前值，避免空控件。
+const availableAspectRatios = computed(() => {
+  const values = ratioFacetOptions.value.map(option => option.value)
+  return values.length > 0 ? values : [selectedRatio.value]
 })
 const qualities = [
   { id: '480p', label: '480p' },
@@ -2114,14 +2252,14 @@ const qualities = [
 ]
 
 const selectedModelName = computed(() => {
-  if (!selectedModel.value) return '默认模型'
   const model = models.value.find(m => m.id === selectedModel.value)
-  return model ? (model.display_name || model.name) : '默认模型'
+  const name = model ? (model.display_name || model.name) : '暂无可用模型'
+  return modelSelectionMode.value === 'auto' ? `智能匹配 · ${candidateModels.value.length} 个` : name
 })
 
 const selectedQualityLabel = computed(() => {
   const quality = availableQualities.value.find(q => q.id === selectedQuality.value)
-  return quality ? quality.label : '2K'
+  return quality ? quality.label : toQualityOption(selectedQuality.value).label
 })
 
 function toQualityOption(resolution) {
@@ -2144,17 +2282,8 @@ function uniqueQualityOptions(resolutions) {
 
 // 根据当前模型是否有分辨率变体，过滤可选的分辨率列表
 const availableQualities = computed(() => {
-  const model = models.value.find(m => m.id === selectedModel.value)
-  if (!model) return qualities
-  // 优先使用模型的 supported_resolutions 字段
-  if (model.supported_resolutions && model.supported_resolutions.length > 0) {
-    return uniqueQualityOptions(model.supported_resolutions)
-  }
-  // 降级：使用 _resolutionVariants
-  if (model._hasResolutionVariants && model._resolutionVariants) {
-    return uniqueQualityOptions(Object.keys(model._resolutionVariants))
-  }
-  return qualities
+  const values = qualityFacetOptions.value.map(option => option.value)
+  return values.length > 0 ? uniqueQualityOptions(values) : [toQualityOption(selectedQuality.value)]
 })
 
 function getModelNameById(modelId) {
@@ -2269,20 +2398,73 @@ const featureMap = {
   ]
 }
 
+function getFilterOptionLabel(facet, value) {
+  if (facet === 'feature') {
+    const feature = (featureMap[selectedType.value] || []).find(item => item.id === value)
+    return feature?.label || String(value)
+  }
+  if (facet === 'resolution') return toQualityOption(value).label
+  if (facet === 'duration') return `${value}秒`
+  return String(value)
+}
+
+function sortModelFilterOptions(facet, options) {
+  if (facet === 'duration') return [...options].sort((a, b) => Number(a.value) - Number(b.value))
+  if (facet === 'resolution') {
+    const order = new Map(['480P', '720P', '1080P', '2K', '4K'].map((value, index) => [value, index]))
+    return [...options].sort((a, b) => (order.get(a.value) ?? 99) - (order.get(b.value) ?? 99))
+  }
+  return options
+}
+
+const modelFilterGroups = computed(() => {
+  const facets = [
+    { id: 'feature', label: '特色功能' },
+    { id: 'resolution', label: '画质' },
+    { id: 'ratio', label: '比例' }
+  ]
+  if (selectedType.value === 'video') facets.push({ id: 'duration', label: '秒数' })
+
+  return facets.map(facet => ({
+    ...facet,
+    options: sortModelFilterOptions(
+      facet.id,
+      buildModelFilterOptions(models.value, selectedType.value, facet.id)
+    ).map(option => ({
+      ...option,
+      label: getFilterOptionLabel(facet.id, option.value)
+    }))
+  }))
+})
+
+const modelFilterOptionKey = computed(() => modelFilterGroups.value
+  .map(group => `${group.id}:${group.options.map(option => option.value).join(',')}`)
+  .join('|'))
+
+watch(modelFilterOptionKey, () => {
+  for (const group of modelFilterGroups.value) {
+    const allowed = new Set(group.options.map(option => String(option.value)))
+    const selected = modelFilterSelections[group.id]
+    for (let index = selected.length - 1; index >= 0; index -= 1) {
+      if (!allowed.has(String(selected[index]))) selected.splice(index, 1)
+    }
+  }
+  if (selectedType.value !== 'video') modelFilterSelections.duration.splice(0)
+}, { flush: 'post' })
+
 const currentFeatures = computed(() => {
   const allFeatures = featureMap[selectedType.value] || []
-  const model = models.value.find(m => m.id === selectedModel.value)
-  // 如果模型有 ui_features 字段，则只显示该模型支持的功能
-  if (model && model.ui_features && model.ui_features.length > 0) {
-    return allFeatures.filter(f => model.ui_features.includes(f.id))
-  }
-  return allFeatures
+  const labels = new Map(allFeatures.map(feature => [feature.id, feature.label]))
+  return featureFacetOptions.value.map(option => ({
+    id: option.value,
+    label: labels.get(option.value) || option.value
+  }))
 })
 const selectedFeatureLabel = computed(() => {
   if (!selectedFeature.value) return selectedType.value === 'video' ? '全能参考' : '文生图'
-  const allFeatures = currentFeatures.value
+  const allFeatures = featureMap[selectedType.value] || []
   const feature = allFeatures.find(f => f.id === selectedFeature.value)
-  return feature ? feature.label : (selectedType.value === 'video' ? '全能参考' : '文生图')
+  return feature ? feature.label : selectedFeature.value
 })
 
 // ========== 下拉框切换函数 ==========
@@ -2390,7 +2572,9 @@ function positionDropdown(name, triggerRef, posRef) {
 }
 
 function selectType(type) {
+  resetModelFilters()
   selectedType.value = type.id
+  modelSelectionMode.value = 'auto'
   selectedFeature.value = ''
   clearDualUploadSlots()
   isTypeDropdownOpen.value = false
@@ -2398,69 +2582,16 @@ function selectType(type) {
   nextTick(() => { if (window.lucide) lucide.createIcons() })
 }
 function selectModel(model) {
+  modelSelectionMode.value = 'manual'
   selectedModel.value = model.id
   isModelDropdownOpen.value = false
-  // 如果模型有分辨率变体，自动切换到该模型支持的默认分辨率
-  if (model._hasResolutionVariants && model._resolutionVariants) {
-    const supportedKeys = Object.keys(model._resolutionVariants)
-    if (!supportedKeys.includes(selectedQuality.value)) {
-      selectedQuality.value = supportedKeys.includes('1080p') ? '1080p' : supportedKeys[0]
-    }
-  } else if (model.supported_resolutions && model.supported_resolutions.length > 0) {
-    // 无变体但有 supported_resolutions（如 gpt-image-2 的 WxH 格式）
-    const supportedLower = model.supported_resolutions.map(r => String(r).toLowerCase())
-    // 优先 1080p
-    if (supportedLower.includes('1080p')) {
-      // 仅保留被新模型支持的标准分辨率，避免残留旧模型的 WxH 格式（如 1024x1024）
-      // availableQualities 在匹配到标准分辨率时会过滤掉 WxH 值，故 WxH 残留值需重置
-      const isStandardSupported = qualities.some(q => q.id === selectedQuality.value && supportedLower.includes(q.id))
-      if (!isStandardSupported) {
-        selectedQuality.value = '1080p'
-      }
-    } else {
-      // 不支持 1080p，选最大分辨率（WxH 格式取最大宽度）
-      let maxRes = model.supported_resolutions[0]
-      let maxPx = 0
-      for (const r of model.supported_resolutions) {
-        const label = String(r)
-        const pxMatch = label.match(/^(\d+)x\d+$/)
-        const px = pxMatch ? parseInt(pxMatch[1], 10) : 0
-        if (px > maxPx) {
-          maxPx = px
-          maxRes = label
-        }
-      }
-      selectedQuality.value = maxRes.toLowerCase()
-    }
-  } else {
-    // 模型无分辨率信息：清理非标准残留值（如旧模型的 WxH 格式 1024x1024），保留标准分辨率
-    if (!qualities.some(q => q.id === selectedQuality.value)) {
-      selectedQuality.value = '1080p'
-    }
-  }
-  // 如果模型有 supported_aspect_ratios，且当前比例不在支持列表内，自动修正
-  if (model.supported_aspect_ratios && model.supported_aspect_ratios.length > 0) {
-    if (!model.supported_aspect_ratios.includes(selectedRatio.value)) {
-      selectedRatio.value = model.supported_aspect_ratios.includes('16:9')
-        ? '16:9'
-        : model.supported_aspect_ratios[0]
-    }
-  } else if (!defaultAspectRatios.includes(selectedRatio.value)) {
-    // 模型未设置比例：清理非法残留值，回退默认
-    selectedRatio.value = '16:9'
-  }
-  // 如果当前时长超过模型最大时长，自动修正
-  if (model.max_duration && videoDuration.value > model.max_duration) {
-    videoDuration.value = model.max_duration
-  }
-  // 如果模型有特定时长列表（如 Seedance 仅支持 5/10/11），自动修正到最接近的合法值
-  if (model.valid_durations && model.valid_durations.length > 0) {
-    if (!model.valid_durations.includes(videoDuration.value)) {
-      videoDuration.value = model.valid_durations.reduce((prev, curr) =>
-        Math.abs(curr - videoDuration.value) < Math.abs(prev - videoDuration.value) ? curr : prev
-      )
-    }
-  }
+  nextTick(() => { if (window.lucide) lucide.createIcons() })
+}
+function selectAutoModel() {
+  modelSelectionMode.value = 'auto'
+  const model = chooseSmartModel(candidateModels.value, selectedModel.value)
+  selectedModel.value = model?.id || ''
+  isModelDropdownOpen.value = false
   nextTick(() => { if (window.lucide) lucide.createIcons() })
 }
 function selectRatio(ratio) {
@@ -2600,6 +2731,7 @@ function updateModelsByType() {
   console.log('🔄 切换生成类型:', selectedType.value, {
     image: imageModels.value.length,
     video: videoModels.value.length,
+    audio: audioModels.value.length,
     digitalHuman: digitalHumanModels.value.length
   })
 
@@ -2620,6 +2752,7 @@ function updateModelsByType() {
       models.value = [...videoModels.value]
   }
 
+  modelSelectionMode.value = 'auto'
   selectedModel.value = ''
   console.log('✅ 模型列表已更新, 当前模型数量:', models.value.length, `(${selectedType.value})`)
 }
@@ -2674,15 +2807,18 @@ async function initModels() {
   console.log('✅ 模型列表初始化完成:', {
     图片生成: imageModels.value.length,
     视频生成: videoModels.value.length,
+    音频生成: audioModels.value.length,
     数字人: digitalHumanModels.value.length,
     当前显示: models.value.length,
-    总计: imageModels.value.length + videoModels.value.length + digitalHumanModels.value.length
+    总计: imageModels.value.length + videoModels.value.length + audioModels.value.length + digitalHumanModels.value.length
   })
 }
 
 // 切换生成类型时自动更新模型列表
 watch(selectedType, (newType) => {
   console.log('🔄 切换生成类型:', newType)
+  resetModelFilters()
+  modelSelectionMode.value = 'auto'
   selectedModel.value = ''
   selectedFeature.value = ''
   uploadedFiles.value = []
@@ -2700,6 +2836,28 @@ watch(soundToggleMode, (mode) => {
   }
   // mode === 'free' 时不干预，保留用户选择
 })
+
+const candidateModelKey = computed(() => candidateModels.value.map(model => model.id).join('|'))
+
+watch(candidateModelKey, (newKey, oldKey) => {
+  const currentIsValid = candidateModels.value.some(model => model.id === selectedModel.value)
+  if (modelSelectionMode.value === 'manual' && currentIsValid) return
+
+  const switchedFromManual = modelSelectionMode.value === 'manual' && Boolean(selectedModel.value)
+  if (switchedFromManual) modelSelectionMode.value = 'auto'
+
+  const smartModel = chooseSmartModel(candidateModels.value, currentIsValid ? selectedModel.value : '')
+  selectedModel.value = smartModel?.id || ''
+
+  if (switchedFromManual) {
+    const message = smartModel
+      ? `原模型不符合筛选条件，已匹配 ${candidateModels.value.length} 个模型`
+      : '当前筛选条件暂无可用模型，请移除部分标签'
+    showToast(message, smartModel ? 'info' : 'warning')
+  } else if (!smartModel && oldKey && !newKey) {
+    showToast('当前筛选条件暂无可用模型，请移除部分标签', 'warning')
+  }
+}, { flush: 'post' })
 
 // ========== 文件上传 ==========
 function handleUploadType(fileType) {
@@ -2721,7 +2879,7 @@ function handleUploadType(fileType) {
     const available = limit === null ? selectedFiles.length : Math.max(0, limit - getAttachedReferenceCount(fileType))
     const files = selectedFiles.slice(0, available)
     if (files.length < selectedFiles.length) {
-      showToast(`${getFileTypeLabel(fileType)}参考素材最多可添加 ${limit} 个`, 'warning')
+      showToast(getReferenceLimitMessage(fileType, limit), 'warning')
     }
     for (const file of files) {
       const reader = new FileReader()
@@ -3366,6 +3524,7 @@ function onDragEnd() {}
 let globalModels = {
   image_models: [],
   video_models: [],
+  audio_models: [],
   voices: []
 }
 
@@ -3385,13 +3544,13 @@ async function fetchModels() {
     if (isUnmounted.value) return
     if (data.code !== 200) throw new Error(safeMessage(data.message, '获取模型列表失败'))
 
-    globalModels = data.data || { image_models: [], video_models: [], voices: [] }
+    globalModels = data.data || { image_models: [], video_models: [], audio_models: [], voices: [] }
     console.log('✅ 模型列表获取成功:', globalModels)
 
     if (data.data?.summary) {
       const s = data.data.summary
       console.log('📊 模型统计:',
-        `图片=${s.total_image_models}, 视频=${s.total_video_models}, 音色=${s.total_voices}`,
+        `图片=${s.total_image_models}, 视频=${s.total_video_models}, 音频=${s.total_audio_models}, 音色=${s.total_voices}`,
         '| 厂商:', s.vendors?.join(', '))
     }
 
@@ -3399,7 +3558,7 @@ async function fetchModels() {
   } catch (error) {
     console.error('❌ 获取模型列表失败:', error)
     if (!isUnmounted.value) showToast('获取模型列表失败，请检查后端服务', 'error')
-    return { image_models: [], video_models: [], voices: [] }
+    return { image_models: [], video_models: [], audio_models: [], voices: [] }
   }
 }
 
@@ -3486,6 +3645,8 @@ function mergeResolutionVariants(modelList) {
       const group = groupMap.get(base)
       group.variants.set(parsed.resolution, m)
       group.merged._resolutionVariants[parsed.resolution] = m.id
+      if (!group.merged._resolutionMaterialConfigs) group.merged._resolutionMaterialConfigs = {}
+      group.merged._resolutionMaterialConfigs[parsed.resolution] = getModelMaterialConfig(m)
       // 保存各变体的价格字段，供前端本地计价使用
       if (!group.merged._variantPriceData) group.merged._variantPriceData = {}
       group.merged._variantPriceData[parsed.resolution] = {
@@ -3539,6 +3700,7 @@ function mergeResolutionVariants(modelList) {
     const allResKeys = new Set()
     const variants = {}
     const variantPriceData = {}
+    const resolutionMaterialConfigs = {}
     for (const m of group) {
       // 收集每个变体声明的所有分辨率（取并集，汇总条目也会被纳入）
       const resList = Array.isArray(m.supported_resolutions) && m.supported_resolutions.length > 0
@@ -3549,6 +3711,7 @@ function mergeResolutionVariants(modelList) {
       const singleRes = extractSingleResolution(m)
       if (singleRes) {
         variants[singleRes] = m.id
+        resolutionMaterialConfigs[singleRes] = getModelMaterialConfig(m)
         // 保存该变体的价格字段
         variantPriceData[singleRes] = {
           price_per_request: m.price_per_request,
@@ -3570,6 +3733,9 @@ function mergeResolutionVariants(modelList) {
       if (Object.keys(variantPriceData).length > 0) {
         merged._variantPriceData = variantPriceData
       }
+      if (Object.keys(resolutionMaterialConfigs).length > 0) {
+        merged._resolutionMaterialConfigs = resolutionMaterialConfigs
+      }
       merged.supported_resolutions = Array.from(allResKeys)
         .map(r => RES_KEY_TO_LABEL[r] || r.toUpperCase())
         // 按 qualities 顺序排序，便于展示
@@ -3588,6 +3754,7 @@ function classifyModels(fetchedModels) {
   const result = {
     image: [],
     video: [],
+    audio: [],
     digitalHuman: []
   }
 
@@ -3610,10 +3777,19 @@ function classifyModels(fetchedModels) {
     })
     .map(m => ({
       ...m,
+      supported_aspect_ratios: m.supported_aspect_ratios?.length ? m.supported_aspect_ratios : m.supported_ratios,
       inputType: 'text',
       categoryLabel: '文本输入'
     }))
   const rawVideo = (fetchedModels.video_models || [])
+    .filter(m => m.is_enabled !== false)
+    .map(m => ({
+      ...m,
+      supported_aspect_ratios: m.supported_aspect_ratios?.length ? m.supported_aspect_ratios : m.supported_ratios,
+      inputType: 'text',
+      categoryLabel: '文本输入'
+    }))
+  const rawAudio = (fetchedModels.audio_models || [])
     .filter(m => m.is_enabled !== false)
     .map(m => ({
       ...m,
@@ -3632,11 +3808,13 @@ function classifyModels(fetchedModels) {
   // 合并分辨率变体后再赋值
   result.image = mergeResolutionVariants(rawImage)
   result.video = mergeResolutionVariants(rawVideo)
+  result.audio = rawAudio
   result.digitalHuman = rawDigitalHuman
 
   console.log('📊 模型分类完成（使用后端分类）:', {
     图片生成: result.image.length,
     视频生成: result.video.length,
+    音频生成: result.audio.length,
     数字人: result.digitalHuman.length
   })
 
@@ -3648,14 +3826,6 @@ function classifyModels(fetchedModels) {
   }
 
   return result
-}
-
-const qualityMap = {
-  '480p': '480P',
-  '720p': '720P',
-  '1080p': '1080P',
-  '2k': '2K',
-  '4k': '4K'
 }
 
 function getCurrentParams() {
@@ -3677,17 +3847,6 @@ function getCurrentParams() {
 
 // ========== 价格估算函数（必须在变量声明之后） ==========
 
-function getBusinessModelId(model, fallbackId = '') {
-  const explicitBusinessId = String(model?.business_model_id || '').trim()
-  if (explicitBusinessId) return explicitBusinessId
-
-  // 兼容公共模型接口尚未透传 business_model_id 的旧响应：
-  // 内部 model_id 可能以 _vendor_a / _vendor_b 结尾，生成接口只接收稳定业务 ID。
-  return String(fallbackId || model?.id || model?.name || '')
-    .trim()
-    .replace(/_vendor_[ab]$/i, '')
-}
-
 function getTaskDisplayModel(taskDetail) {
   const detail = taskDetail?.data || taskDetail
   return detail?.decoded_generation_params?.model || detail?.model_id || detail?.model_name || ''
@@ -3701,16 +3860,23 @@ async function fetchEstimatedPrice() {
   const params = getCurrentParams()
   let outputType = selectedType.value === 'digital-human' ? 'digital_human' : selectedType.value
 
-  // 与 buildGenerateRequest 保持一致：分辨率变体模型要走实际 model_id，否则后端按展示名查不到
-  const submitModelValue = getBusinessModelId(currentModel)
+  const modelRoute = resolveRouteContext(currentModel, {
+    mediaType: selectedType.value,
+    uiFeature: selectedFeature.value,
+    resolution: params.resolution,
+    ratio: params.ratio,
+    duration: outputType === 'video' ? videoDuration.value : null,
+    inputFiles: getRoutingInputFiles()
+  })
 
   const requestParams = {
-    model: submitModelValue,
+    model: modelRoute.businessModelId,
     output_type: outputType,
     parameters: {
       resolution: params.resolution || '1080P'
     }
   }
+  if (modelRoute.feature) requestParams.feature = modelRoute.feature
 
   if (outputType === 'video') {
     requestParams.parameters.duration = videoDuration.value
@@ -3751,8 +3917,13 @@ function debouncedFetchPrice() {
   }, 500)
 }
 
-// 监听参数变化自动估算价格
-watch([selectedModel, selectedType, selectedQuality, videoDuration, videoSoundEnabled], () => {
+const requestContextKey = computed(() => [
+  selectedFeature.value,
+  ...getRoutingInputFiles().map(file => file?.type || '')
+].join('|'))
+
+// 生成上下文变化时重新估价；该上下文不参与模型筛选。
+watch([selectedModel, selectedType, selectedQuality, videoDuration, videoSoundEnabled, requestContextKey], () => {
   debouncedFetchPrice()
 })
 
@@ -3766,7 +3937,6 @@ function buildGenerateRequest() {
   else if (selectedType.value === 'digital-human') outputType = 'digital_human'
   else outputType = 'video'
 
-  const submitModelValue = getBusinessModelId(currentModel)
   const hasAtReferences = referencedFiles.value.length > 0
 
   let allInputFiles
@@ -3814,43 +3984,16 @@ function buildGenerateRequest() {
   validateReferenceLimits(allInputFiles)
 
   const uiFeature = selectedFeature.value || ''
-
-  const getAutoFeature = () => {
-    if (outputType === 'image') return allInputFiles.length > 0 ? 'image_reference' : 'text_to_image'
-    if (outputType === 'digital_human') return 'digital_human'
-    if (allInputFiles.length === 0) return 'text_to_video'
-    if (allInputFiles.length === 1) return 'global_reference'
-    return 'multi_reference'
-  }
-
-  const specialVideoFeatures = ['first-last-frame', 'smart-multi-frame', 'first-frame-gen', 'motion-imitate', 'lip-sync', 'ai-outfit', 'scene-replace', 'local-adjust', 'style-replace', 'effect-copy', 'item-fix', 'color-restore', 'smart-remove', 'video-expand']
-
-  let feature
-  if (!uiFeature || uiFeature === '') {
-    feature = getAutoFeature()
-  } else {
-    if (outputType === 'image') {
-      if (uiFeature === 'text2img') feature = 'text_to_image'
-      else if (uiFeature === 'reference') feature = 'image_reference'
-      else feature = uiFeature
-    } else if (outputType === 'video') {
-      if (uiFeature === 'all-reference') {
-        feature = getAutoFeature()
-      } else if (specialVideoFeatures.includes(uiFeature)) {
-        feature = allInputFiles.length >= 2 ? 'multi_reference' : (allInputFiles.length === 1 ? 'global_reference' : 'text_to_video')
-      } else {
-        feature = getAutoFeature()
-      }
-    } else if (outputType === 'digital_human') {
-      feature = 'digital_human'
-    } else {
-      feature = getAutoFeature()
-    }
-  }
-
-  if (outputType === 'video' && allInputFiles.length >= 2 && !['first-last-frame'].includes(uiFeature)) {
-    if (feature !== 'multi_reference') feature = 'multi_reference'
-  }
+  const modelRoute = resolveRouteContext(currentModel, {
+    mediaType: selectedType.value,
+    uiFeature,
+    resolution: params.resolution,
+    ratio: params.ratio,
+    duration: outputType === 'video' ? videoDuration.value : null,
+    inputFiles: allInputFiles
+  })
+  const feature = modelRoute.feature
+  const submitModelValue = modelRoute.businessModelId
 
   console.log('[feature调试]', { selectedType: selectedType.value, outputType, uiFeature, allInputFilesLen: allInputFiles.length, feature })
 
@@ -4172,7 +4315,10 @@ async function handleGenerate() {
   }
 
   const modelCheck = models.value.find(m => m.id === selectedModel.value)
-  if (modelCheck && modelCheck.vendor === 'vendor_b') {
+  if (modelCheck && modelRequiresInput(modelCheck) && getRoutingInputFiles().length === 0) {
+    showToast('当前模型需要上传输入素材', 'warning'); return
+  }
+  if (modelCheck && modelCheck.vendor === 'vendor_b' && !modelCheck.variants) {
     const modelId = (modelCheck.id || modelCheck.name || '').toLowerCase()
     const modelName = (modelCheck.name || '').toLowerCase()
     const isI2VModel = modelId.includes('i2v') || modelName.includes('image.to.video')
@@ -6071,6 +6217,7 @@ function handleGlobalClick(e) {
 
 /* ====== 输入卡片（通用）===== */
 .input-card {
+  position: relative;
   width: 100%;
   max-width: 800px;
   background: #ffffff;
@@ -6331,6 +6478,28 @@ function handleGlobalClick(e) {
   background: #f3f4f6;
   color: #111827;
 }
+
+.upload-option > span:first-of-type { flex: 1; }
+
+.upload-limit-badge {
+  margin-left: auto;
+  padding: 2px 6px;
+  border-radius: 999px;
+  color: #64748b;
+  background: #f1f5f9;
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.upload-option:disabled {
+  color: #9ca3af;
+  cursor: not-allowed;
+  background: transparent;
+}
+
+.upload-option:disabled .upload-limit-badge { color: #b45309; background: #fff7ed; }
 
 /* 双上传框 */
 .dual-upload-bar {
@@ -6675,8 +6844,10 @@ function handleGlobalClick(e) {
 /* 底部操作栏 */
 .input-card-footer {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
+  min-width: 0;
+  min-height: 87px;
   padding: 10px 16px 14px;
   border-top: 1px solid #f3f4f6;
   gap: 12px;
@@ -6686,9 +6857,16 @@ function handleGlobalClick(e) {
   display: flex;
   align-items: center;
   gap: 6px;
-  flex-wrap: wrap;
   flex: 1;
+  min-width: 0;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  overscroll-behavior-x: contain;
 }
+
+.footer-options::-webkit-scrollbar { display: none; }
 
 .option-chip {
   display: inline-flex;
@@ -6703,7 +6881,11 @@ function handleGlobalClick(e) {
   cursor: pointer;
   transition: all 0.2s;
   white-space: nowrap;
+  flex: 0 0 auto;
 }
+
+.model-chip { max-width: 180px; }
+.model-chip > span { overflow: hidden; text-overflow: ellipsis; }
 
 .option-chip:hover {
   border-color: #c4b5fd;
@@ -6779,15 +6961,21 @@ function handleGlobalClick(e) {
 }
 
 .footer-right {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, auto) 36px;
+  grid-template-rows: 36px 22px;
   align-items: center;
-  gap: 10px;
+  column-gap: 10px;
+  row-gap: 4px;
   flex-shrink: 0;
 }
 
 .price-estimate-mini {
   display: inline-flex;
   align-items: center;
+  grid-column: 2;
+  grid-row: 2;
+  justify-self: end;
   gap: 4px;
   font-size: 11px;
   color: #f59e0b;
@@ -6818,11 +7006,16 @@ function handleGlobalClick(e) {
 }
 
 .char-count-mini {
+  grid-column: 1;
+  grid-row: 1;
+  justify-self: end;
   font-size: 11px;
   color: #9ca3af;
 }
 
 .send-btn {
+  grid-column: 2;
+  grid-row: 1;
   width: 36px;
   height: 36px;
   border: none;
@@ -6881,6 +7074,13 @@ function handleGlobalClick(e) {
   background: #f5f3ff;
   color: #2563eb;
   font-weight: 500;
+}
+
+.select-empty-state {
+  padding: 12px;
+  color: #94a3b8;
+  font-size: 12px;
+  text-align: center;
 }
 
 .model-option-main {

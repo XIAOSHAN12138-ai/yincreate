@@ -627,6 +627,14 @@
                       <i data-lucide="link"></i>
                       <code>{{ result.taskId.slice(0, 12) }}...</code>
                     </div>
+                    <div class="meta-item" v-if="result.businessModelId" :title="result.businessModelId">
+                      <i data-lucide="route"></i>
+                      <code>{{ result.businessModelId }}</code>
+                    </div>
+                    <div class="meta-item" v-if="result.upstreamRoutes?.length" :title="result.upstreamRoutes.map(route => `P${route.priority_order} ${route.upstream_id}`).join('\n')">
+                      <i data-lucide="git-branch"></i>
+                      <span>上游路由 {{ result.upstreamRoutes.length }} 条</span>
+                    </div>
                   </div>
 
                   <div v-if="result.error" class="error-message">
@@ -819,6 +827,7 @@
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import AppLayout from '../components/layout/AppLayout.vue'
 import request, { safeMessage } from '../utils/request'
+import { resolveModelRoute, resolveUpstreamRoutes } from '../utils/modelRouting'
 
 const VENDOR_B_API_KEY = 'ErtveAQybj1XCVRsncebuiIYzTxUV0tganVf4bMijr5SKVzU'
 
@@ -2028,13 +2037,6 @@ async function fetchModels() {
   }
 }
 
-// 生成接口只接收稳定业务 ID；分辨率由 parameters.resolution 交给后端路由上游模型。
-function resolveSubmitModelId(model) {
-  const businessModelId = String(model?.business_model_id || '').trim()
-  if (businessModelId) return businessModelId
-  return String(model?.id || model?.model_id || '').trim().replace(/_vendor_[ab]$/i, '')
-}
-
 function switchType(typeId) {
   if (isBatchTesting.value) {
     showToast('测试进行中，请先停止当前测试', 'warning')
@@ -2266,16 +2268,7 @@ async function runSingleTest(model, resolution) {
   try {
     if (isUnmounted.value) throw new Error('组件已卸载')
 
-    // === 1. 解析稳定业务 model ID（兼容移除前端类型后缀）===
-    const rawModelId = resolveSubmitModelId(model)
-    let apiModelId = String(rawModelId || '')
-    const suffixPattern = /__(img|vid|aud)$/
-    if (suffixPattern.test(apiModelId)) {
-      apiModelId = apiModelId.replace(suffixPattern, '')
-      console.log(`[模型ID映射] ${rawModelId} → ${apiModelId}`)
-    }
-
-    // === 2. 构造输入文件列表（优先 @引用，其次上传素材）===
+    // === 1. 构造输入文件列表（优先 @引用，其次上传素材）===
     const hasAtReferences = referencedFiles.value.length > 0
     let allInputFiles
     if (hasAtReferences) {
@@ -2293,14 +2286,15 @@ async function runSingleTest(model, resolution) {
     const isI2VModel = (model.id || model.name || '').toLowerCase().includes('i2v') ||
                        (model.name || '').toLowerCase().includes('image.to.video')
 
-    if (isI2VModel && allInputFiles.length === 0) {
+    if (!model.variants && isI2VModel && allInputFiles.length === 0) {
       console.warn(`⚠️ ${model.name} 是 I2V 模型，需要上传参考图片才能测试`)
       const duration = ((Date.now() - startTime) / 1000).toFixed(2) + 's'
       updateResultToFailed('I2V 模型需要上传参考图片，请先上传测试图片', duration)
       return
     }
 
-    // === 3. 解析 feature（与 GenerateView 对齐）===
+    // === 2. 解析 feature（与 GenerateView 对齐）===
+    const uiFeature = selectedFeature.value || ''
     let feature = selectedFeature.value || ''
     if (!feature) {
       if (selectedType.value === 'image') {
@@ -2313,7 +2307,41 @@ async function runSingleTest(model, resolution) {
       feature = 'multi_reference'
     }
 
-    // === 4. 处理 prompt 中的 @ 标签替换为 <<<object_id>>> ===
+    const resolutionLabel = RES_KEY_TO_LABEL[resolution.toLowerCase()] || resolution.toUpperCase()
+    const modelRoute = resolveModelRoute(model, {
+      feature,
+      resolution: resolutionLabel,
+      inputFiles: allInputFiles
+    })
+    feature = modelRoute.feature || feature
+    let apiModelId = modelRoute.businessModelId
+    const suffixPattern = /__(img|vid|aud)$/
+    if (suffixPattern.test(apiModelId)) apiModelId = apiModelId.replace(suffixPattern, '')
+
+    const requiresInput = typeof modelRoute.variant?.requires_input === 'boolean'
+      ? modelRoute.variant.requires_input
+      : model.requires_input === true
+    if (requiresInput && allInputFiles.length === 0) {
+      const duration = ((Date.now() - startTime) / 1000).toFixed(2) + 's'
+      updateResultToFailed('当前模型需要上传输入素材', duration)
+      return
+    }
+
+    const resultIndex = findResultIndex()
+    if (resultIndex > -1) {
+      const newResults = [...testResults.value]
+      newResults[resultIndex] = {
+        ...newResults[resultIndex],
+        businessModelId: apiModelId,
+        upstreamRoutes: resolveUpstreamRoutes(model, {
+          businessModelId: apiModelId,
+          resolution: resolutionLabel
+        })
+      }
+      testResults.value = newResults
+    }
+
+    // === 3. 处理 prompt 中的 @ 标签替换为 <<<object_id>>> ===
     let finalPrompt = String(testPrompt.value || '').trim()
     if (referencedFiles.value.length > 0 && finalPrompt.includes('@')) {
       const tagToObjectId = {}
@@ -2325,8 +2353,7 @@ async function runSingleTest(model, resolution) {
       finalPrompt = finalPrompt.replace(/@\S+/g, (match) => tagToObjectId[match] || match)
     }
 
-    // === 5. 构造 requestBody ===
-    const resolutionLabel = RES_KEY_TO_LABEL[resolution.toLowerCase()] || resolution.toUpperCase()
+    // === 4. 构造 requestBody ===
     const requestBody = {
       output_type: String(selectedType.value || 'image'),
       model: apiModelId,
@@ -2389,7 +2416,7 @@ async function runSingleTest(model, resolution) {
         requestBody.parameters.watermark = false
       }
 
-      const featureVal = feature
+      const featureVal = uiFeature
       // 对口型
       if (featureVal === 'lip-sync') {
         requestBody.parameters.scene_type = 'lip_sync'

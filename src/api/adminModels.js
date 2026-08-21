@@ -542,7 +542,7 @@ export function cloneAdminModelApi(modelId, data) {
         vendor_display_name: data.vendor_display_name ?? source.vendor_display_name,
         media_type: source.media_type,
         upstream_model_id: source.upstream_model_id,
-        upstream_id_by_resolution: source.upstream_id_by_resolution ? { ...source.upstream_id_by_resolution } : {},
+        upstream_id_by_resolution: data.upstream_id_by_resolution ?? (source.upstream_id_by_resolution ? { ...source.upstream_id_by_resolution } : {}),
         resolution_variants: data.resolution_variants ?? (source.resolution_variants ? JSON.parse(JSON.stringify(source.resolution_variants)) : {}),
         endpoint: source.endpoint,
         endpoint_2: source.endpoint_2,
